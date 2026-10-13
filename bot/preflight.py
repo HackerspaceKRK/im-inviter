@@ -49,7 +49,14 @@ async def check_authentik(c: httpx.AsyncClient) -> bool:
         ok &= say(False, "Authentik: brand nie ma ustawionego flow user settings", "Admin → System → Brands")
         return ok
     r = await c.get(f"{url}/api/v3/flows/executor/{slug}/", headers=h)
-    fields = [f.get("field_key") for f in (r.json().get("fields") or [])] if r.status_code == 200 else []
+    body = r.json() if r.status_code == 200 else {}
+    if body.get("component") == "ak-stage-access-denied":
+        ok &= say(False, f"Authentik: flow {slug} jest zepsuty — „{body.get('error_message')}”",
+                  "ustawienia usera są teraz niedostępne dla wszystkich! Szybkie wyjście: Admin → System → Brands → "
+                  "User settings flow = default-user-settings-flow. Potem sprawdź Admin → Flows → "
+                  f"{slug} → Stage Bindings (ma być prompt order 20 i user write order 100)")
+        return ok
+    fields = [f.get("field_key") for f in (body.get("fields") or [])]
     wanted = ["attributes.matrix_handles", "attributes.telegram_username", "attributes.telegram_code"]
     missing = [w for w in wanted if w not in fields]
     ok &= say(not missing, f"Authentik: pola IM widoczne w ustawieniach usera (flow {slug})",
