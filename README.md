@@ -9,7 +9,7 @@ Jeden bot-demon czyta atrybuty i:
 - **Telegram**: potwierdza własność konta, zapisuje numeryczne `telegram_id`, wysyła w DM
   jednorazowe linki do grup.
 
-Projekt jest niezależny od k0 — `docker compose up` gdziekolwiek.
+Projekt jest niezależny od k0 — `docker compose up` gdziekolwiek. Wdrożenie krok po kroku (hskrk/hswro): [docs/DEPLOY.md](docs/DEPLOY.md).
 
 ## Atrybuty (kontrakt dla innych aplikacji)
 
