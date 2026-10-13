@@ -130,5 +130,10 @@ Utrata stanu (SQLite) = bot może ponownie zaprosić osoby, które świadomie wy
 
 (Uzupełniaj tu po każdej instancji: wersja Authentika, czy blueprint się zaaplikował, co trzeba było poprawić.)
 
+- Pierwszy test (auth.sq9.wtf + matrix.masmiks.wtf, 2026-10-13):
+  - Token z kreatora service-accounta (App password) → `403 Token invalid/expired`. Token z
+    Directory → Tokens z Intent = API Token → działa (potwierdzone).
+  - Nowy service account nie ma żadnych uprawnień: `GET /core/users/me/` działa (200), ale lista
+    userów → 403, dopóki nie dostanie View user (i Change user do zapisu atrybutów).
 - hskrk: —
 - hswro: —
