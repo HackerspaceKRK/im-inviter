@@ -157,5 +157,14 @@ Utrata stanu (SQLite) = bot może ponownie zaprosić osoby, które świadomie wy
   - Authentik 2026.8.3: rola z View/Change user przypisana **bezpośrednio do usera** `im-sync`
     wystarczyła (`/core/users/me/` → `roles: ['im-sync']`, `groups: []`). Sama rola nieprzypięta do
     nikogo (`roles: []`) daje 403 mimo że istnieje. Preflight: wszystko OK; `--dry-run --once`: bot widzi userów.
+  - Własny flow ustawień (`im-sync-user-settings-flow`): pola IM na jednym ekranie ze standardowymi,
+    po zapisie i przeładowaniu wartości są na miejscu (potwierdzone na żywo).
+  - Pułapka: wpięcie zapisu usera przed formularzem → `No Pending data.` i **zepsute ustawienia
+    wszystkich userów** (brand wskazywał na flow). Dlatego: najpierw zastosuj blueprint i sprawdź
+    Stage Bindings (prompt 20, write 100), dopiero potem przełącz brand. `order` jest w `attrs`
+    blueprintu, nie w `identifiers` (inaczej ponowne zastosowanie robi duplikat). Preflight wykrywa ten stan.
+  - E2E Matrix (2026-10-13): handle wpisany w ustawieniach → bot zamienia string na listę, zaprasza,
+    pisze `Dodano @… na prośbę <user>` (m.notice), ustawia `matrix_status: ok`; drugi przebieg nic nie robi.
+  - Telegram: jeszcze nie testowany.
 - hskrk: —
 - hswro: —
