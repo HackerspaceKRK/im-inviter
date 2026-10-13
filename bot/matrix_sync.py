@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from html import escape as html_escape
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
@@ -39,12 +40,21 @@ class Matrix:
         )
         r.raise_for_status()
 
-    async def notice(self, room: str, text: str) -> None:
+    async def notice(self, room: str, text: str, html: Optional[str] = None) -> None:
+        content: Dict[str, Any] = {"msgtype": "m.notice", "body": text}
+        if html:
+            content.update({"format": "org.matrix.custom.html", "formatted_body": html})
         r = await self.client.put(
             f"{self.base}/rooms/{quote(room, safe='')}/send/m.room.message/{uuid.uuid4().hex}",
-            json={"msgtype": "m.notice", "body": text},
+            json=content,
         )
         r.raise_for_status()
+
+
+def user_link(mxid: str) -> str:
+    """Handle jako link matrix.to do USERA: klient rysuje pigułkę użytkownika, a nie zgaduje
+    z tekstu `@x:domena.pl`, że to adres pokoju/domeny."""
+    return f'<a href="https://matrix.to/#/{quote(mxid, safe="@:")}">{html_escape(mxid)}</a>'
 
 
 def _err(e: Exception) -> str:
@@ -102,13 +112,19 @@ async def run_matrix_cycle(
                         stats["invited"] += 1
                         log.info("zaproszono %s do %s (user %s)", handle, room, username)
                         if not is_space:
-                            await matrix.notice(room, f"Dodano {handle} na prośbę {username}")
+                            await matrix.notice(
+                                room, f"Dodano {handle} na prośbę {username}",
+                                f"Dodano {user_link(handle)} na prośbę {html_escape(username)}",
+                            )
                         elif notify_room:
                             if room not in space_names:
                                 space_names[room] = await matrix.room_name(room) or room
+                            sp = space_names[room]
                             await matrix.notice(
                                 notify_room,
-                                f"Dodano {handle} do przestrzeni {space_names[room]} na prośbę {username}",
+                                f"Dodano {handle} do przestrzeni {sp} na prośbę {username}",
+                                f"Dodano {user_link(handle)} do przestrzeni {html_escape(sp)} "
+                                f"na prośbę {html_escape(username)}",
                             )
                 except Exception as e:  # jeden zły handle/pokój nie wywala reszty
                     stats["errors"] += 1

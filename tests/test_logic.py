@@ -3,7 +3,7 @@ import asyncio
 from bot.handles import (
     find_pending_tg_users, invite_action, normalize_matrix_handles, normalize_tg_username,
 )
-from bot.matrix_sync import run_matrix_cycle
+from bot.matrix_sync import run_matrix_cycle, user_link
 from bot.state import State
 from bot.telegram_sync import TelegramLogic
 
@@ -80,7 +80,7 @@ class FakeMatrix:
     def __init__(self, membership=None, fail=()):
         self.members = membership or {}  # (room, mxid) -> membership
         self.fail = set(fail)
-        self.invites, self.notices = [], []
+        self.invites, self.notices, self.htmls = [], [], []
 
     async def membership(self, room, mxid):
         return self.members.get((room, mxid))
@@ -91,8 +91,9 @@ class FakeMatrix:
         self.invites.append((room, mxid))
         self.members[(room, mxid)] = "invite"
 
-    async def notice(self, room, text):
+    async def notice(self, room, text, html=None):
         self.notices.append((room, text))
+        self.htmls.append(html)
 
     async def room_name(self, room):
         return {"!space": "Test Space"}.get(room)
@@ -269,3 +270,17 @@ def test_groups_command_only_for_linked_users():
     ok, text = run(logic.groups_reply(12345))
     assert not ok and "/start" in text
     assert run(TelegramLogic(az, State(), []).groups_reply(99))[0] is False  # brak skonfigurowanych grup
+
+
+def test_user_link_is_matrix_to_user_link_and_escapes():
+    assert user_link("@jan:x.pl") == '<a href="https://matrix.to/#/@jan:x.pl">@jan:x.pl</a>'
+    assert "<script>" not in user_link("@a<script>:x.pl")  # nigdy surowy HTML
+
+
+def test_notice_has_plain_body_and_html_user_link_with_escaped_username():
+    az = FakeAuthentik([{"pk": 7, "username": "jan<b>", "attributes": {"matrix_handles": "@a:x.y"}}])
+    mx = FakeMatrix()
+    run(run_matrix_cycle(az, mx, State(), ["!r"]))
+    assert mx.notices == [("!r", "Dodano @a:x.y na prośbę jan<b>")]  # body: czysty tekst
+    html = mx.htmls[0]
+    assert 'href="https://matrix.to/#/@a:x.y"' in html and "jan&lt;b&gt;" in html and "<b>" not in html
