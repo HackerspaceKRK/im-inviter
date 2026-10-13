@@ -1,10 +1,92 @@
-# Blueprint Authentika: pola "Matrix / Telegram" w natywnym user settings flow.
-# UWAGA: napisany z dokumentacji, NIE sprawdzony na żywej instancji — przy pierwszym imporcie
-# zobacz w Admin → Fabric → Blueprints, czy się zaaplikował bez błędów (README, krok 2).
+# Blueprint Authentika: własny flow "Update your info" z polami Matrix/Telegram NA JEDNYM EKRANIE
+# ze standardowymi (username, name, email, locale). Pola są zawsze widoczne w ustawieniach usera
+# i wypełnione aktualnymi wartościami z atrybutów.
+#
+# Dlaczego własny flow, a nie dopisanie pól do default-user-settings-flow: domyślne blueprinty
+# Authentika są stosowane ponownie (restart/aktualizacja) i cofnęłyby nasze zmiany.
+#
+# Po imporcie trzeba JEDNORAZOWO przełączyć brand (docs/DEPLOY.md, krok 2):
+#   Admin → System → Brands → authentik-default → "User settings flow" = im-sync-user-settings-flow
+# Brandu celowo nie zmieniamy blueprintem (nadpisałby ustawienia całego brandu przy błędzie).
 version: 1
 metadata:
-  name: im-sync — pola Matrix/Telegram w ustawieniach usera
+  name: im-sync — flow ustawień usera z polami Matrix/Telegram
 entries:
+  - model: authentik_flows.flow
+    id: flow
+    identifiers: {slug: im-sync-user-settings-flow}
+    attrs:
+      name: Update your info
+      title: Update your info
+      designation: stage_configuration
+      authentication: require_authenticated
+
+  # --- standardowe pola (kopia domyślnych, z podpowiedzią aktualnej wartości) ---
+  - model: authentik_stages_prompt.prompt
+    id: p-username
+    identifiers: {name: im-sync-field-username}
+    attrs:
+      field_key: username
+      label: Username
+      type: username
+      required: true
+      order: 100
+      initial_value_expression: true
+      initial_value: |
+        try:
+            return user.username
+        except Exception:
+            return ""
+
+  - model: authentik_stages_prompt.prompt
+    id: p-name
+    identifiers: {name: im-sync-field-name}
+    attrs:
+      field_key: name
+      label: Name
+      type: text
+      required: true
+      order: 101
+      initial_value_expression: true
+      initial_value: |
+        try:
+            return user.name
+        except Exception:
+            return ""
+
+  - model: authentik_stages_prompt.prompt
+    id: p-email
+    identifiers: {name: im-sync-field-email}
+    attrs:
+      field_key: email
+      label: Email
+      type: email
+      required: true
+      order: 102
+      initial_value_expression: true
+      initial_value: |
+        try:
+            return user.email
+        except Exception:
+            return ""
+
+  - model: authentik_stages_prompt.prompt
+    id: p-locale
+    identifiers: {name: im-sync-field-locale}
+    attrs:
+      field_key: attributes.settings.locale
+      label: Locale
+      type: ak-locale
+      required: true
+      order: 103
+      initial_value_expression: true
+      initial_value: |
+        try:
+            return user.attributes.get("settings", {}).get("locale", "")
+        except Exception:
+            return ""
+
+  # --- nasze pola ---
   - model: authentik_stages_prompt.prompt
     id: p-matrix
     identifiers: {name: im-sync-matrix-handles}
@@ -13,13 +95,16 @@ entries:
       label: Konta Matrix
       type: text_area
       required: false
-      order: 10
+      order: 110
       placeholder: "@jan:masmiks.wtf"
       sub_text: Jedno konto w linii. Bot zaprosi je do pokoi.
       initial_value_expression: true
       initial_value: |
-        v = request.user.attributes.get("matrix_handles") or []
-        return v if isinstance(v, str) else "\n".join(v)
+        try:
+            v = user.attributes.get("matrix_handles") or []
+            return v if isinstance(v, str) else "\n".join(v)
+        except Exception:
+            return ""
 
   - model: authentik_stages_prompt.prompt
     id: p-tg-username
@@ -29,12 +114,15 @@ entries:
       label: Telegram @username
       type: text
       required: false
-      order: 11
+      order: 111
       placeholder: "@jan_kowalski"
       sub_text: Potem napisz /start do bota na Telegramie, żeby potwierdzić.
       initial_value_expression: true
       initial_value: |
-        return request.user.attributes.get("telegram_username", "")
+        try:
+            return user.attributes.get("telegram_username", "")
+        except Exception:
+            return ""
 
   - model: authentik_stages_prompt.prompt
     id: p-tg-code
@@ -44,23 +132,36 @@ entries:
       label: Kod z Telegrama (tylko gdy nie masz @username)
       type: text
       required: false
-      order: 12
+      order: 112
       sub_text: Kod dostajesz od bota po /start, ważny 15 minut.
 
   - model: authentik_stages_prompt.promptstage
-    id: s-im
-    identifiers: {name: im-sync-prompt-stage}
+    id: s-prompt
+    identifiers: {name: im-sync-user-settings-prompt}
     attrs:
       fields:
+        - !KeyOf p-username
+        - !KeyOf p-name
+        - !KeyOf p-email
+        - !KeyOf p-locale
         - !KeyOf p-matrix
         - !KeyOf p-tg-username
         - !KeyOf p-tg-code
 
+  - model: authentik_stages_user_write.userwritestage
+    id: s-write
+    identifiers: {name: im-sync-user-settings-write}
+    attrs:
+      user_creation_mode: never_create
+
   - model: authentik_flows.flowstagebinding
     identifiers:
-      target: !Find [authentik_flows.flow, [slug, default-user-settings-flow]]
-      stage: !KeyOf s-im
-      order: 5
-    attrs:
-      evaluate_on_plan: true
-      re_evaluate_policies: false
+      target: !KeyOf flow
+      stage: !KeyOf s-prompt
+      order: 20
+
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf flow
+      stage: !KeyOf s-write
+      order: 100

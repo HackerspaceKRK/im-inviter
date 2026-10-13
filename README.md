@@ -45,7 +45,9 @@ Grupy: bot **nie może** dodać usera do grupy po id (ograniczenie API). Wysyła
    Nadaj mu uprawnienia `View user` i `Change user` (rola + grupa, albo
    Admin → Directory → Users → Permissions). Sprawdź: `curl -H "Authorization: Bearer $T" $URL/api/v3/core/users/`.
 2. **Authentik — pola w ustawieniach**: Admin → Customization → Blueprints → import
-   `blueprints/user-settings-im.yaml` (albo zamontuj do `/blueprints/custom/`). Otwórz jako zwykły user
+   `blueprints/user-settings-im.yaml` (tworzy własny flow ustawień z polami na jednym ekranie),
+   potem **ręcznie** Admin → System → Brands → *User settings flow* = `im-sync-user-settings-flow`
+   (szczegóły i cofnięcie: [docs/DEPLOY.md](docs/DEPLOY.md), krok 2). Otwórz jako zwykły user
    `/if/user/#/settings` i sprawdź, czy są pola. Jeśli blueprint się nie zaaplikował, utwórz 3 Prompty
    z `field_key` `attributes.matrix_handles` / `attributes.telegram_username` / `attributes.telegram_code`
    ręcznie i dopnij Prompt Stage do `default-user-settings-flow` przed etapem zapisu.

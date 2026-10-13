@@ -44,15 +44,34 @@ curl -fsS -H "Authorization: Bearer $TOKEN" "$AUTHENTIK_URL/api/v3/core/users/me
 
 ## 2. Authentik: pola w ustawieniach usera
 
-Admin → **Customization → Blueprints → Create**, wgraj `blueprints/user-settings-im.yaml`
-(albo skopiuj do katalogu blueprintów serwera Authentika: `/blueprints/custom/`).
-Status blueprintu ma być **Successful**. Potem jako zwykły user wejdź na
-`$AUTHENTIK_URL/if/user/#/settings` i sprawdź, czy są pola „Konta Matrix" i „Telegram".
+Blueprint tworzy **własny flow ustawień** `im-sync-user-settings-flow`: jeden ekran ze standardowymi
+polami (username, name, email, locale) **i** naszymi (Matrix, Telegram), wstępnie wypełnionymi
+aktualnymi wartościami. Własny flow, bo domyślne blueprinty Authentika są stosowane ponownie
+i cofnęłyby dopiski w `default-user-settings-flow`.
 
-Gdy blueprint się nie zaaplikuje: utwórz 3 Prompty ręcznie (`field_key`:
-`attributes.matrix_handles` (Text Area), `attributes.telegram_username`, `attributes.telegram_code`),
-Prompt Stage z nimi, i dopnij do `default-user-settings-flow` z `order` mniejszym niż etap zapisu usera.
+1. Admin → **Customization → Blueprints → Create**, wgraj `blueprints/user-settings-im.yaml`
+   (albo skopiuj do katalogu blueprintów serwera Authentika: `/blueprints/custom/`).
+   Status blueprintu ma być **Successful**.
+2. **Przełącz brand** (jednorazowo, ręcznie — blueprint go celowo nie rusza): Admin → **System → Brands** →
+   brand `authentik-default` → *Edit* → **User settings flow** = `im-sync-user-settings-flow`.
+   Cofnięcie = ustaw z powrotem `default-user-settings-flow`.
+3. Jeśli wcześniej wdrożyłeś starszą wersję blueprintu (osobny ekran w domyślnym flow): Admin → Flows →
+   `default-user-settings-flow` → *Stage Bindings* → usuń wpięcie stage'a `im-sync-prompt-stage`.
+4. Jako zwykły user wejdź na `$AUTHENTIK_URL/if/user/#/settings`: w „Update your info" jest jeden ekran
+   z polami „Konta Matrix", „Telegram @username" i „Kod z Telegrama". Zapisz → po ponownym wejściu
+   wartości mają być na miejscu (sprawdź też w Admin → Directory → Users → user → Attributes).
+
+Weryfikacja bez klikania (preflight sprawdza to samo): `python -m bot.preflight` uruchamia flow z brandu
+i szuka naszych trzech pól.
+
+Gdy blueprint się nie zaaplikuje: utwórz Prompty ręcznie (`field_key`: `username`, `name`, `email`,
+`attributes.settings.locale` oraz `attributes.matrix_handles` (Text Area), `attributes.telegram_username`,
+`attributes.telegram_code`), Prompt Stage z nimi, User Write Stage (`never_create`), flow o designation
+*Stage configuration* i dopnij oba stage'e (prompt → order 20, write → order 100).
 **Zapisz u nas, co dokładnie zadziałało** (sekcja „Notatki z wdrożeń" na dole).
+
+Uwaga: flow ustawień domyślnie zabrania zmiany maila (`Not allowed to change email address.`),
+więc konto serwisowe bez maila nie przejdzie go przez API — to ograniczenie konta, nie naszych pól.
 
 ## 3. Matrix: konto bota i token
 
