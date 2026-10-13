@@ -37,7 +37,8 @@ def test_invite_action():
     assert invite_action("invite", False) == "skip"
     assert invite_action(None, False) == "invite"
     assert invite_action("leave", False) == "invite"
-    assert invite_action("leave", True) == "skip"  # świadomie wyszedł
+    assert invite_action("leave", True) == "left"  # odrzucił/wyszedł: nie ponawiamy, ale zgłaszamy
+    assert invite_action(None, True) == "skip"
 
 
 def test_find_pending_tg_users_skips_linked():
@@ -96,7 +97,7 @@ class FakeMatrix:
         self.htmls.append(html)
 
     async def room_name(self, room):
-        return {"!space": "Test Space"}.get(room)
+        return {"!space": "Test Space", "!r": "Pokój R"}.get(room)
 
 
 def matrix_user(raw):
@@ -284,3 +285,36 @@ def test_notice_has_plain_body_and_html_user_link_with_escaped_username():
     assert mx.notices == [("!r", "Dodano @a:x.y na prośbę jan<b>")]  # body: czysty tekst
     html = mx.htmls[0]
     assert 'href="https://matrix.to/#/@a:x.y"' in html and "jan&lt;b&gt;" in html and "<b>" not in html
+
+
+def test_declined_invite_is_reported_in_status_with_room_name_and_not_reinvited():
+    st = State(); st.mark_invited("@a:x.y", "!r")
+    az, mx = FakeAuthentik([matrix_user("@a:x.y")]), FakeMatrix({("!r", "@a:x.y"): "leave"})
+    run(run_matrix_cycle(az, mx, st, ["!r"]))
+    assert mx.invites == []
+    assert az.users[0]["attributes"]["matrix_status"] == "@a:x.y odrzucił zaproszenie lub wyszedł z: Pokój R"
+
+
+def test_removing_handle_forgets_it_so_readding_reinvites():
+    st = State()
+    user = matrix_user("@a:x.y")
+    az, mx = FakeAuthentik([user]), FakeMatrix()
+    run(run_matrix_cycle(az, mx, st, ["!r"]))            # zaproszony
+    mx.members[("!r", "@a:x.y")] = "leave"               # odrzucił
+    run(run_matrix_cycle(az, mx, st, ["!r"]))
+    assert len(mx.invites) == 1                          # nie ponawiamy
+    user["attributes"]["matrix_handles"] = []            # user usuwa handle
+    run(run_matrix_cycle(az, mx, st, ["!r"]))
+    assert not st.was_invited("@a:x.y", "!r")            # pamięć wyczyszczona
+    user["attributes"]["matrix_handles"] = ["@a:x.y"]    # dopisuje z powrotem
+    run(run_matrix_cycle(az, mx, st, ["!r"]))
+    assert len(mx.invites) == 2                          # zaproszony ponownie
+
+
+def test_forget_keeps_handles_still_listed_by_someone_and_dry_run_does_not_forget():
+    st = State(); st.mark_invited("@a:x.y", "!r"); st.mark_invited("@b:x.y", "!r")
+    az, mx = FakeAuthentik([matrix_user("@a:x.y")]), FakeMatrix({("!r", "@a:x.y"): "join"})
+    run(run_matrix_cycle(az, mx, st, ["!r"], dry_run=True))
+    assert st.was_invited("@b:x.y", "!r")                # dry-run niczego nie kasuje
+    run(run_matrix_cycle(az, mx, st, ["!r"]))
+    assert st.was_invited("@a:x.y", "!r") and not st.was_invited("@b:x.y", "!r")

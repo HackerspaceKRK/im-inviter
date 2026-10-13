@@ -80,12 +80,21 @@ async def run_matrix_cycle(
     spaces = spaces or []
     targets = [(r, False) for r in rooms] + [(s, True) for s in spaces if s not in rooms]
     space_names: Dict[str, str] = {}
+    current: set = set()  # wszystkie handle'e wpisane teraz w Authentiku (do zapominania usuniętych)
+
+    async def label(room: str) -> str:
+        """Nazwa pokoju/przestrzeni do komunikatów (cache na przebieg); fallback: ID."""
+        if room not in space_names:
+            space_names[room] = (await matrix.room_name(room)) or room
+        return space_names[room]
+
     for user in await authentik.list_users():
         attrs = user.get("attributes") or {}
         raw = attrs.get("matrix_handles")
         if not raw:
             continue
         handles, invalid = normalize_matrix_handles(raw)
+        current.update(handles)
         username = user["username"]
         msgs: List[str] = [f"niepoprawny handle: {h}" for h in invalid]
 
@@ -100,9 +109,15 @@ async def run_matrix_cycle(
                         await matrix.membership(room, handle), state.was_invited(handle, room)
                     )
                     if action == "banned":
-                        msgs.append(f"{handle} ma bana w {room}")
+                        msgs.append(f"{handle} ma bana w {await label(room)}")
                         if state.report_once(f"ban:{handle}:{room}"):
                             log.warning("%s zbanowany w %s", handle, room)
+                    elif action == "left":
+                        # Odrzucone zaproszenie wygląda w Matrixie tak samo jak wyjście z pokoju (leave).
+                        # Nie ponawiamy; żeby zaprosić jeszcze raz: usuń handle z Authentika i dopisz z powrotem.
+                        msgs.append(f"{handle} odrzucił zaproszenie lub wyszedł z: {await label(room)}")
+                        if state.report_once(f"left:{handle}:{room}"):
+                            log.info("%s odrzucił/wyszedł z %s (user %s)", handle, room, username)
                     elif action == "invite":
                         if dry_run:
                             log.info("[dry-run] zaprosiłbym %s do %s (user %s)", handle, room, username)
@@ -117,9 +132,7 @@ async def run_matrix_cycle(
                                 f"Dodano {user_link(handle)} na prośbę {html_escape(username)}",
                             )
                         elif notify_room:
-                            if room not in space_names:
-                                space_names[room] = await matrix.room_name(room) or room
-                            sp = space_names[room]
+                            sp = await label(room)
                             await matrix.notice(
                                 notify_room,
                                 f"Dodano {handle} do przestrzeni {sp} na prośbę {username}",
@@ -135,4 +148,11 @@ async def run_matrix_cycle(
         status = "; ".join(msgs) if msgs else "ok"
         if attrs.get("matrix_status") != status and not dry_run:
             await authentik.update_attributes(user["pk"], {"matrix_status": status})
+
+    # Handle usunięty z Authentika = zapomnij o nim (skasuj i dopisz z powrotem → ponowne zaproszenie).
+    # Dopiero po całej pętli, więc nie dotyczy przebiegu, który się wysypał w połowie.
+    if not dry_run:
+        gone = state.forget_missing(current)
+        if gone:
+            log.info("zapomniano handle'e usunięte z Authentika: %s", ", ".join(gone))
     return stats

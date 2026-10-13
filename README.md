@@ -86,6 +86,8 @@ Authentika i Matrixa. **Nie pokrywają** realnych API — to kroki E2E poniżej.
 ## Znane ograniczenia
 
 - Bot nie usuwa/nie wyrzuca kont po skasowaniu handle'a z atrybutu.
-- Kto świadomie wyszedł z pokoju po zaproszeniu, nie jest zapraszany ponownie (pamięć w SQLite);
-  utrata `/data/state.db` oznacza ponowne zaproszenie takich osób.
+- Kto odrzucił zaproszenie albo wyszedł z pokoju, nie jest zapraszany ponownie (pamięć w SQLite), a
+  `matrix_status` mówi to wprost („… odrzucił zaproszenie lub wyszedł z: <nazwa>"). Ponowne zaproszenie:
+  usuń handle z Authentika i dopisz z powrotem (bot zapomina handle'e, których nikt już nie ma wpisanych).
+  Utrata `/data/state.db` oznacza ponowne zaproszenie takich osób.
 - Polling co `POLL_INTERVAL` s, bez webhooków z Authentika.

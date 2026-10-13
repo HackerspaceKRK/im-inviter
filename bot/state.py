@@ -50,6 +50,22 @@ class State:
         )
         self.db.commit()
 
+    def forget_missing(self, current_handles) -> list:
+        """Zapomina handle'e, których nikt już nie ma wpisanych w Authentiku (zwraca ich listę).
+
+        Dzięki temu skasowanie handle'a i dopisanie go z powrotem = ponowne zaproszenie
+        (np. po odrzuconym zaproszeniu). Czyści też zapamiętane „już zgłoszone" błędy i bany.
+        """
+        known = {r[0] for r in self.db.execute("SELECT DISTINCT handle FROM invited")}
+        gone = sorted(known - set(current_handles))
+        for h in gone:
+            self.db.execute("DELETE FROM invited WHERE handle=?", (h,))
+            for prefix in (f"ban:{h}:", f"err:{h}:"):
+                self.db.execute("DELETE FROM reported WHERE substr(key,1,?)=?", (len(prefix), prefix))
+        if gone:
+            self.db.commit()
+        return gone
+
     def report_once(self, key: str) -> bool:
         """True przy pierwszym wywołaniu dla danego klucza (czyli: warto zalogować/zgłosić)."""
         cur = self.db.execute("INSERT OR IGNORE INTO reported VALUES(?,?)", (key, int(time.time())))

@@ -142,6 +142,17 @@ z SQLite, osobna nazwa projektu compose wynika z nazwy katalogu).
    `curl -X PATCH -H "Authorization: Bearer <token zwykłego usera>" -d '{"attributes":{"telegram_id":1}}' $AUTHENTIK_URL/api/v3/core/users/me/` —
    ma się nie udać. Jeśli się uda, nie ufaj `telegram_id` w innych aplikacjach, dopóki tego nie zablokujesz.
 
+## Odrzucone zaproszenia i ponowne zapraszanie
+
+- **Odrzucone zaproszenie wygląda w Matrixie jak wyjście z pokoju (`leave`).** Bot go nie ponawia (inaczej zapraszałby
+  co minutę kogoś, kto powiedział „nie"), ale zapisuje w `matrix_status` usera: „@x odrzucił zaproszenie lub wyszedł z: <nazwa>".
+- **Ponowne zaproszenie:** user usuwa handle z ustawień Authentika i dopisuje z powrotem. Bot zapomina handle'e, których
+  nikt już nie ma wpisanych (przy najbliższym przebiegu, ≤ `POLL_INTERVAL`), więc dopisany handle jest zapraszany od nowa.
+- Zapominanie dotyczy wyłącznie pamięci bota (SQLite). **Nikogo nie wyrzuca** z pokoi (usuwanie jest osobną, jeszcze
+  niezaimplementowaną funkcją).
+- Ręcznie, bez ruszania Authentika: zaproś konto z Elementa albo skasuj parę z bazy
+  (`delete from invited where handle=? and room=?` w `state.db`).
+
 ## Utrzymanie
 
 | Co | Komenda |

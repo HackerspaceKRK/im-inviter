@@ -48,7 +48,7 @@ def normalize_tg_username(value: Any) -> Optional[str]:
 
 
 def invite_action(membership: Optional[str], already_invited: bool) -> str:
-    """Co zrobić z parą (handle, pokój): 'invite' | 'skip' | 'banned'.
+    """Co zrobić z parą (handle, pokój): 'invite' | 'skip' | 'banned' | 'left'.
 
     membership = wartość z m.room.member (join/invite/leave/ban) albo None gdy brak wpisu.
     already_invited = bot już kiedyś to zaprosił (SQLite). Dzięki temu ktoś, kto świadomie
@@ -58,6 +58,8 @@ def invite_action(membership: Optional[str], already_invited: bool) -> str:
         return "banned"
     if membership in ("join", "invite"):
         return "skip"
+    if membership == "leave" and already_invited:
+        return "left"  # odrzucił zaproszenie albo wyszedł — nie ponawiamy, ale zgłaszamy w statusie
     return "skip" if already_invited else "invite"
 
 
