@@ -73,22 +73,47 @@ class TelegramLogic:
         log.info("połączono authentik pk=%s z telegram id=%s", pk, tg_id)
         return True, "Połączone ✅"
 
-    async def send_group_links(self, tg_id: int) -> None:
+    async def send_group_links(self, tg_id: int) -> int:
+        """Wysyła w DM „Nazwa grupy: link" (jednorazowe, 24 h). Zwraca liczbę wysłanych linków.
+
+        Jedna grupa, która zawiedzie (bot bez uprawnień, grupa usunięta), nie blokuje reszty;
+        user dostaje listę grup, do których linku nie udało się wygenerować.
+        """
         if not self.bot or not self.groups:
-            return
-        lines = []
+            return 0
+        lines, failed = [], []
         for chat in self.groups:
+            try:
+                title = (await self.bot.get_chat(chat)).title or str(chat)
+            except Exception:
+                title = str(chat)
             try:
                 link = await self.bot.create_chat_invite_link(
                     chat, member_limit=1, expire_date=int(time.time()) + 24 * 3600
                 )
-                lines.append(link.invite_link)
+                lines.append(f"• {title}: {link.invite_link}")
             except Exception as e:
                 log.error("invite link dla grupy %s: %s", chat, e)
+                failed.append(title)
+        text = ""
         if lines:
-            await self.bot.send_message(
-                tg_id, "Linki do grup (jednorazowe, ważne 24 h):\n" + "\n".join(lines)
-            )
+            text = ("Linki do grup (jednorazowe, ważne 24 h):\n" + "\n".join(lines)
+                    + "\n\nNowe linki w każdej chwili: /grupy")
+        if failed:
+            text += ("\n\n" if text else "") + "Nie udało się wygenerować linku do: " + ", ".join(failed) + \
+                    ". Napisz do admina."
+        if text:
+            await self.bot.send_message(tg_id, text)
+        return len(lines)
+
+    async def groups_reply(self, tg_id: int) -> Tuple[bool, str]:
+        """/grupy: (czy wysłać linki, tekst gdy nie). Tylko dla połączonych userów."""
+        users = await self.authentik.list_users()
+        if not any(str((u.get("attributes") or {}).get("telegram_id")) == str(tg_id) for u in users):
+            return False, "To konto Telegram nie jest jeszcze połączone z Authentikiem. Wyślij /start."
+        if not self.groups:
+            return False, "Nie ma skonfigurowanych grup."
+        return True, ""
 
     async def poll_codes(self) -> int:
         """Ścieżka B: userzy, którzy wkleili kod w Authentiku. Zwraca liczbę połączonych."""
@@ -140,6 +165,17 @@ class TelegramLogic:
                   InlineKeyboardButton("Nie", callback_data="cancel")]]
             )
         await update.message.reply_text(text, reply_markup=markup)
+
+    async def on_groups(self, update: Any, context: Any) -> None:
+        if update.effective_chat.type != "private":
+            return
+        u = update.effective_user
+        send, text = await self.groups_reply(u.id)
+        log.info("/grupy od tg id=%s -> %s", u.id, "wysyłam linki" if send else "odmowa")
+        if send:
+            await self.send_group_links(u.id)
+        else:
+            await update.message.reply_text(text)
 
     async def on_button(self, update: Any, context: Any) -> None:
         q = update.callback_query

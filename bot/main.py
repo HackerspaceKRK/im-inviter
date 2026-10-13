@@ -42,8 +42,13 @@ async def amain(dry_run: bool, once: bool) -> None:
         tg_app = Application.builder().token(os.environ["TELEGRAM_TOKEN"]).build()
         tg_logic.bot = tg_app.bot
         tg_app.add_handler(CommandHandler("start", tg_logic.on_start))
+        tg_app.add_handler(CommandHandler("grupy", tg_logic.on_groups))
         tg_app.add_handler(CallbackQueryHandler(tg_logic.on_button))
         await tg_app.initialize()
+        await tg_app.bot.set_my_commands([
+            ("start", "Połącz konto z Authentikiem"),
+            ("grupy", "Wyślij mi świeże linki do grup"),
+        ])
         await tg_app.start()
         await tg_app.updater.start_polling()
     elif os.environ.get("TELEGRAM_TOKEN"):

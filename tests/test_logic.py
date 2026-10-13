@@ -217,3 +217,55 @@ def test_new_start_does_not_invalidate_previous_codes_but_is_capped():
     codes = [s.new_tg_code(7, now=2000 + i) for i in range(8)]
     ok = [c for c in codes if s.consume_tg_code(c, now=2100) == 7]
     assert len(ok) == 5 and ok == codes[-5:]  # zostaje 5 najnowszych
+
+
+class FakeTgBot:
+    def __init__(self, titles=None, broken=()):
+        self.titles, self.broken = titles or {}, set(broken)
+        self.sent = []
+
+    async def get_chat(self, chat):
+        from types import SimpleNamespace
+        return SimpleNamespace(title=self.titles.get(chat))
+
+    async def create_chat_invite_link(self, chat, member_limit=None, expire_date=None):
+        from types import SimpleNamespace
+        if chat in self.broken:
+            raise RuntimeError("Not enough rights")
+        assert member_limit == 1 and expire_date
+        return SimpleNamespace(invite_link=f"https://t.me/+link{chat}")
+
+    async def send_message(self, tg_id, text):
+        self.sent.append((tg_id, text))
+
+
+def test_group_links_have_titles_and_one_message():
+    bot = FakeTgBot({-1: "Główna", -2: "Offtop"})
+    n = run(TelegramLogic(None, State(), [-1, -2], bot).send_group_links(99))
+    assert n == 2 and len(bot.sent) == 1
+    text = bot.sent[0][1]
+    assert "• Główna: https://t.me/+link-1" in text and "• Offtop: https://t.me/+link-2" in text
+    assert "/grupy" in text
+
+
+def test_group_links_one_failure_does_not_block_others_and_is_reported():
+    bot = FakeTgBot({-1: "Główna", -2: "Zepsuta"}, broken=[-2])
+    n = run(TelegramLogic(None, State(), [-1, -2], bot).send_group_links(99))
+    assert n == 1
+    text = bot.sent[0][1]
+    assert "Główna" in text and "Nie udało się wygenerować linku do: Zepsuta" in text
+
+
+def test_group_links_title_falls_back_to_id():
+    bot = FakeTgBot()  # get_chat zwraca title=None
+    run(TelegramLogic(None, State(), [-5], bot).send_group_links(1))
+    assert "• -5: " in bot.sent[0][1]
+
+
+def test_groups_command_only_for_linked_users():
+    az = FakeAuthentik([tg_user(1, telegram_id=99), tg_user(2)])
+    logic = TelegramLogic(az, State(), [-1])
+    assert run(logic.groups_reply(99)) == (True, "")
+    ok, text = run(logic.groups_reply(12345))
+    assert not ok and "/start" in text
+    assert run(TelegramLogic(az, State(), []).groups_reply(99))[0] is False  # brak skonfigurowanych grup

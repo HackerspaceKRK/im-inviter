@@ -101,7 +101,14 @@ Bot może zapraszać do **przestrzeni** zamiast (albo obok) pojedynczych pokoi: 
 
 1. `@BotFather` → `/newbot` → token. `/setprivacy` zostaw domyślne (bot działa tylko w DM).
 2. Dodaj bota do grup jako **administratora z prawem „Invite users"**.
-3. ID grup (`-100…`): np. dodaj tymczasowo `@RawDataBot` do grupy albo `getUpdates` botem po wiadomości w grupie.
+3. ID grup (`-100…`): np. dodaj tymczasowo `@RawDataBot` do grupy albo `getUpdates` botem po wiadomości w grupie
+   (uwaga: gdy bot działa, `getUpdates` daje błąd 409 — zatrzymaj go na chwilę).
+4. **Wiele grup:** `TELEGRAM_GROUPS=-100111,-100222,-100333` (po przecinku), bot musi być adminem z „Invite users"
+   w każdej. Zmiana `.env` wymaga restartu bota; `python -m bot.preflight` sprawdza każdą grupę osobno.
+   Po weryfikacji user dostaje w jednym DM „• Nazwa grupy: link" (jednorazowe, 24 h). Grupa, której link się nie
+   wygeneruje, nie blokuje reszty — user dostaje jej nazwę na liście „Nie udało się wygenerować linku do: …".
+5. **`/grupy`** (w prywatnej rozmowie z botem, tylko dla połączonych userów): świeże linki do wszystkich grup. Dzięki
+   temu dodanie grupy później nie wymaga niczego od admina, a wygasły/zużyty link da się odnowić.
 
 ## 5. Wdrożenie na hoście
 
