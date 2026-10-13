@@ -28,6 +28,9 @@ async def check_authentik(c: httpx.AsyncClient) -> bool:
     url, ok = os.environ.get("AUTHENTIK_URL", "").rstrip("/"), True
     if not url or not os.environ.get("AUTHENTIK_TOKEN"):
         return say(False, "Authentik: brak AUTHENTIK_URL / AUTHENTIK_TOKEN w .env")
+    if "example.com" in url or "DOMENA" in url:
+        return say(False, "Authentik: AUTHENTIK_URL to jeszcze placeholder z szablonu",
+                   "wpisz prawdziwy adres Authentika w .env")
     h = {"Authorization": f"Bearer {os.environ['AUTHENTIK_TOKEN']}"}
     r = await c.get(f"{url}/api/v3/core/users/me/", headers=h)
     if not say(r.status_code == 200, f"Authentik: token działa (HTTP {r.status_code})",
@@ -96,9 +99,22 @@ async def check_telegram(c: httpx.AsyncClient) -> bool:
     return ok
 
 
+async def _safe(name: str, check, c: httpx.AsyncClient) -> bool:
+    """Błąd sieci w jednym teście nie zabija reszty i nie sypie tracebackiem."""
+    try:
+        return await check(c)
+    except httpx.RequestError as e:
+        return say(False, f"{name}: nie mogę się połączyć ({type(e).__name__}: {e})",
+                   "sprawdź adres w .env (placeholder z szablonu? literówka? DNS?)")
+
+
 async def amain() -> int:
     async with httpx.AsyncClient(timeout=20) as c:
-        results = [await check_authentik(c), await check_matrix(c), await check_telegram(c)]
+        results = [
+            await _safe("Authentik", check_authentik, c),
+            await _safe("Matrix", check_matrix, c),
+            await _safe("Telegram", check_telegram, c),
+        ]
     print("\nWszystko gotowe." if all(results) else "\nSą błędy — popraw i uruchom ponownie.")
     return 0 if all(results) else 1
 
