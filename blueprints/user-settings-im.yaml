@@ -154,14 +154,18 @@ entries:
     attrs:
       user_creation_mode: never_create
 
+  # order jest w attrs (nie w identifiers): ponowne zastosowanie poprawia kolejność istniejącego wpięcia
+  # zamiast tworzyć drugie. Zapis (100) MUSI być po formularzu (20), inaczej: "No Pending data."
   - model: authentik_flows.flowstagebinding
     identifiers:
       target: !KeyOf flow
       stage: !KeyOf s-prompt
+    attrs:
       order: 20
 
   - model: authentik_flows.flowstagebinding
     identifiers:
       target: !KeyOf flow
       stage: !KeyOf s-write
+    attrs:
       order: 100
