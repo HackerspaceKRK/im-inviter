@@ -29,6 +29,10 @@ class Matrix:
         r.raise_for_status()
         return r.json().get("membership")
 
+    async def room_name(self, room: str) -> Optional[str]:
+        r = await self.client.get(f"{self.base}/rooms/{quote(room, safe='')}/state/m.room.name")
+        return r.json().get("name") if r.status_code == 200 else None
+
     async def invite(self, room: str, mxid: str) -> None:
         r = await self.client.post(
             f"{self.base}/rooms/{quote(room, safe='')}/invite", json={"user_id": mxid}
@@ -53,10 +57,19 @@ def _err(e: Exception) -> str:
 
 
 async def run_matrix_cycle(
-    authentik: Any, matrix: Matrix, state: Any, rooms: List[str], dry_run: bool = False
+    authentik: Any, matrix: Matrix, state: Any, rooms: List[str], dry_run: bool = False,
+    spaces: Optional[List[str]] = None, notify_room: Optional[str] = None,
 ) -> Dict[str, int]:
-    """Jeden przebieg: dla każdego usera z handle'ami zaproś brakujących. Zwraca statystyki."""
+    """Jeden przebieg: dla każdego usera z handle'ami zaproś brakujących. Zwraca statystyki.
+
+    rooms  — zaproszenie + wiadomość „Dodano …" w tym samym pokoju.
+    spaces — samo zaproszenie do przestrzeni (pokoje-dzieci wpuszczają członków space same, o ile
+             mają regułę „restricted"); wiadomość idzie do notify_room, a bez niego nie ma jej wcale.
+    """
     stats = {"invited": 0, "errors": 0}
+    spaces = spaces or []
+    targets = [(r, False) for r in rooms] + [(s, True) for s in spaces if s not in rooms]
+    space_names: Dict[str, str] = {}
     for user in await authentik.list_users():
         attrs = user.get("attributes") or {}
         raw = attrs.get("matrix_handles")
@@ -71,7 +84,7 @@ async def run_matrix_cycle(
             await authentik.update_attributes(user["pk"], {"matrix_handles": handles})
 
         for handle in handles:
-            for room in rooms:
+            for room, is_space in targets:
                 try:
                     action = invite_action(
                         await matrix.membership(room, handle), state.was_invited(handle, room)
@@ -88,7 +101,15 @@ async def run_matrix_cycle(
                         state.mark_invited(handle, room)
                         stats["invited"] += 1
                         log.info("zaproszono %s do %s (user %s)", handle, room, username)
-                        await matrix.notice(room, f"Dodano {handle} na prośbę {username}")
+                        if not is_space:
+                            await matrix.notice(room, f"Dodano {handle} na prośbę {username}")
+                        elif notify_room:
+                            if room not in space_names:
+                                space_names[room] = await matrix.room_name(room) or room
+                            await matrix.notice(
+                                notify_room,
+                                f"Dodano {handle} do przestrzeni {space_names[room]} na prośbę {username}",
+                            )
                 except Exception as e:  # jeden zły handle/pokój nie wywala reszty
                     stats["errors"] += 1
                     msgs.append(f"{handle} → {room}: {_err(e)}")

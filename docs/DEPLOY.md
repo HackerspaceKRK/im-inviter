@@ -84,6 +84,19 @@ więc konto serwisowe bez maila nie przejdzie go przez API — to ograniczenie k
 4. ID pokoju (`!abc:serwer`): Element → Ustawienia pokoju → Zaawansowane → „Wewnętrzne ID pokoju".
    Pokoje **niezaszyfrowane** (inaczej zaproszenia działają, ale wiadomość „Dodano…" nie).
 
+### Przestrzenie (Spaces) Matrix
+
+Bot może zapraszać do **przestrzeni** zamiast (albo obok) pojedynczych pokoi: `MATRIX_SPACES=!id:serwer`.
+- Zaproszenie idzie tylko do przestrzeni. Pokoje-dzieci wpuszczają członków space same, **o ile mają regułę
+  join „restricted" (Space members)** — w Elemencie: ustawienia pokoju → Bezpieczeństwo → „Dostęp do pokoju".
+  Pokoje „invite only" bot musi dostać osobno w `MATRIX_ROOMS`.
+- `MATRIX_NOTIFY_ROOM` = pokój, w którym bot pisze „Dodano … do przestrzeni … na prośbę …". Puste = bez wiadomości.
+- Bot musi być w przestrzeni z power level ≥ „invite" (preflight sprawdza, czy to naprawdę `m.space`).
+- **Nie wskazuj cudzej wspólnoty.** Bot może być w publicznych przestrzeniach (np. „Polish Hackerspaces"),
+  ale nie ma tam uprawnień i nie powinien tam nikogo zapraszać.
+- Testową przestrzeń z dzieckiem „restricted" zakłada: `python3 scripts/matrix-create-space.py "nazwa" "pokój"`
+  (zmienne z `.env`); wypisuje `MATRIX_SPACES=…`.
+
 ## 4. Telegram (opcjonalnie)
 
 1. `@BotFather` → `/newbot` → token. `/setprivacy` zostaw domyślne (bot działa tylko w DM).
@@ -166,5 +179,8 @@ Utrata stanu (SQLite) = bot może ponownie zaprosić osoby, które świadomie wy
   - E2E Matrix (2026-10-13): handle wpisany w ustawieniach → bot zamienia string na listę, zaprasza,
     pisze `Dodano @… na prośbę <user>` (m.notice), ustawia `matrix_status: ok`; drugi przebieg nic nie robi.
   - Telegram: jeszcze nie testowany.
+  - Przestrzenie (2026-10-13, testowa „im-sync test" na masmiks.wtf): `MATRIX_SPACES` + `MATRIX_NOTIFY_ROOM` →
+    zaproszenie tylko do space (`invite`), wiadomość w pokoju powiadomień, drugi przebieg nic nie robi.
+    Nie sprawdzone: czy zaproszony po akceptacji space sam wchodzi do dziecka „restricted" (wymaga akcji zaproszonego).
 - hskrk: —
 - hswro: —

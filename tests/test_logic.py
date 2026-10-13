@@ -94,6 +94,9 @@ class FakeMatrix:
     async def notice(self, room, text):
         self.notices.append((room, text))
 
+    async def room_name(self, room):
+        return {"!space": "Test Space"}.get(room)
+
 
 def matrix_user(raw):
     return {"pk": 7, "username": "jan", "attributes": {"matrix_handles": raw}}
@@ -179,3 +182,19 @@ def test_already_linked_start_reply():
     az = FakeAuthentik([tg_user(1, telegram_id=99)])
     text, pk = run(TelegramLogic(az, State(), []).start_reply(99, "x"))
     assert pk is None and "już połączone" in text
+
+
+def test_space_invite_has_no_message_in_space_but_in_notify_room():
+    az, mx, st = FakeAuthentik([matrix_user("@a:x.y")]), FakeMatrix(), State()
+    run(run_matrix_cycle(az, mx, st, [], spaces=["!space"], notify_room="!notify"))
+    assert mx.invites == [("!space", "@a:x.y")]
+    assert mx.notices == [("!notify", "Dodano @a:x.y do przestrzeni Test Space na prośbę jan")]
+    run(run_matrix_cycle(az, mx, st, [], spaces=["!space"], notify_room="!notify"))
+    assert len(mx.invites) == 1 and len(mx.notices) == 1  # idempotentnie
+
+
+def test_space_without_notify_room_is_silent_and_room_still_gets_message():
+    az, mx = FakeAuthentik([matrix_user("@a:x.y")]), FakeMatrix()
+    run(run_matrix_cycle(az, mx, State(), ["!r"], spaces=["!space"]))
+    assert sorted(mx.invites) == [("!r", "@a:x.y"), ("!space", "@a:x.y")]
+    assert mx.notices == [("!r", "Dodano @a:x.y na prośbę jan")]

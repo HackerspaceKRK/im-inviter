@@ -66,9 +66,10 @@ async def check_authentik(c: httpx.AsyncClient) -> bool:
 
 
 async def check_matrix(c: httpx.AsyncClient) -> bool:
-    rooms = _csv("MATRIX_ROOMS")
-    if not rooms:
-        print("      (MATRIX_ROOMS puste — Matrix pominięty)")
+    rooms, spaces = _csv("MATRIX_ROOMS"), _csv("MATRIX_SPACES")
+    notify = os.environ.get("MATRIX_NOTIFY_ROOM", "").strip()
+    if not rooms and not spaces:
+        print("      (MATRIX_ROOMS i MATRIX_SPACES puste — Matrix pominięty)")
         return True
     base = os.environ.get("MATRIX_HOMESERVER", "").rstrip("/") + "/_matrix/client/v3"
     h = {"Authorization": f"Bearer {os.environ.get('MATRIX_TOKEN', '')}"}
@@ -78,12 +79,25 @@ async def check_matrix(c: httpx.AsyncClient) -> bool:
         return False
     me, ok = r.json()["user_id"], True
     say(True, f"Matrix: bot to {me}")
-    for room in rooms:
+    for room in list(dict.fromkeys(rooms + spaces + ([notify] if notify else []))):  # bez duplikatów
         rq = quote(room, safe="")
+        kind = "przestrzeń" if room in spaces else ("pokój powiadomień" if room == notify else "pokój")
         r = await c.get(f"{base}/rooms/{rq}/state/m.room.member/{quote(me, safe='')}", headers=h)
         joined = r.status_code == 200 and r.json().get("membership") == "join"
-        ok &= say(joined, f"Matrix {room}: bot jest w pokoju", "wejdź botem do pokoju (zaproś go i zaakceptuj)")
+        ok &= say(joined, f"Matrix {room}: bot jest w ({kind})", "wejdź botem (zaproś go i zaakceptuj)")
         if not joined:
+            continue
+        if room in spaces:
+            r = await c.get(f"{base}/rooms/{rq}/state/m.room.create", headers=h)
+            is_space = r.status_code == 200 and r.json().get("type") == "m.space"
+            ok &= say(is_space, f"Matrix {room}: to jest przestrzeń (m.space)",
+                      "w MATRIX_SPACES podaj ID PRZESTRZENI, zwykły pokój daj do MATRIX_ROOMS")
+        if room == notify and room not in rooms + spaces:
+            r = await c.get(f"{base}/rooms/{rq}/state/m.room.power_levels", headers=h)
+            pl = r.json() if r.status_code == 200 else {}
+            mine = pl.get("users", {}).get(me, pl.get("users_default", 0))
+            ok &= say(mine >= pl.get("events", {}).get("m.room.message", pl.get("events_default", 0)),
+                      f"Matrix {room}: bot może pisać w pokoju powiadomień", "podnieś power level bota")
             continue
         r = await c.get(f"{base}/rooms/{rq}/state/m.room.power_levels", headers=h)
         pl = r.json() if r.status_code == 200 else {}
