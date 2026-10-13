@@ -1,0 +1,66 @@
+# Blueprint Authentika: pola "Matrix / Telegram" w natywnym user settings flow.
+# UWAGA: napisany z dokumentacji, NIE sprawdzony na żywej instancji — przy pierwszym imporcie
+# zobacz w Admin → Fabric → Blueprints, czy się zaaplikował bez błędów (README, krok 2).
+version: 1
+metadata:
+  name: im-sync — pola Matrix/Telegram w ustawieniach usera
+entries:
+  - model: authentik_stages_prompt.prompt
+    id: p-matrix
+    identifiers: {name: im-sync-matrix-handles}
+    attrs:
+      field_key: attributes.matrix_handles
+      label: Konta Matrix
+      type: text_area
+      required: false
+      order: 10
+      placeholder: "@jan:masmiks.wtf"
+      sub_text: Jedno konto w linii. Bot zaprosi je do pokoi.
+      initial_value_expression: true
+      initial_value: |
+        v = request.user.attributes.get("matrix_handles") or []
+        return v if isinstance(v, str) else "\n".join(v)
+
+  - model: authentik_stages_prompt.prompt
+    id: p-tg-username
+    identifiers: {name: im-sync-telegram-username}
+    attrs:
+      field_key: attributes.telegram_username
+      label: Telegram @username
+      type: text
+      required: false
+      order: 11
+      placeholder: "@jan_kowalski"
+      sub_text: Potem napisz /start do bota na Telegramie, żeby potwierdzić.
+      initial_value_expression: true
+      initial_value: |
+        return request.user.attributes.get("telegram_username", "")
+
+  - model: authentik_stages_prompt.prompt
+    id: p-tg-code
+    identifiers: {name: im-sync-telegram-code}
+    attrs:
+      field_key: attributes.telegram_code
+      label: Kod z Telegrama (tylko gdy nie masz @username)
+      type: text
+      required: false
+      order: 12
+      sub_text: Kod dostajesz od bota po /start, ważny 15 minut.
+
+  - model: authentik_stages_prompt.promptstage
+    id: s-im
+    identifiers: {name: im-sync-prompt-stage}
+    attrs:
+      fields:
+        - !KeyOf p-matrix
+        - !KeyOf p-tg-username
+        - !KeyOf p-tg-code
+
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !Find [authentik_flows.flow, [slug, default-user-settings-flow]]
+      stage: !KeyOf s-im
+      order: 5
+    attrs:
+      evaluate_on_plan: true
+      re_evaluate_policies: false

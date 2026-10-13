@@ -1,0 +1,87 @@
+# authentik-im-sync
+
+User loguje się do Authentika, w ustawieniach wpisuje konta Matrix (1..n) i Telegram.
+Dane zostają jako **atrybuty usera w Authentiku** — inne apki i boty mogą z nich korzystać.
+Jeden bot-demon czyta atrybuty i:
+
+- **Matrix**: zaprasza brakujące konta do pokoi z configu i pisze w pokoju
+  `Dodano <handle> na prośbę <username>`.
+- **Telegram**: potwierdza własność konta, zapisuje numeryczne `telegram_id`, wysyła w DM
+  jednorazowe linki do grup.
+
+Projekt jest niezależny od k0 — `docker compose up` gdziekolwiek.
+
+## Atrybuty (kontrakt dla innych aplikacji)
+
+| Atrybut | Pisze | Znaczenie |
+|---|---|---|
+| `matrix_handles` | user, potem bot normalizuje | **lista** `@x:serwer` (małe litery, bez duplikatów) |
+| `matrix_status` | bot | `ok` albo opis błędów (zły handle, ban, odmowa invite) |
+| `telegram_username` | user | wniosek, jeszcze niezweryfikowany — **nie ufać** |
+| `telegram_code` | user | kod z bota, bot kasuje po użyciu |
+| `telegram_id` | **tylko bot** | zweryfikowane id (liczba) — temu można ufać |
+| `telegram_status` | bot | `ok` / `zły lub wygasły kod` / konflikt |
+
+## Jak działa weryfikacja Telegrama
+
+Telegram sam gwarantuje, że `@username` należy do pisającego, więc **token zwykle nie jest potrzebny**:
+
+1. User wpisuje `@jan_kowalski` w Authentiku.
+2. Pisze `/start` do bota → bot pyta „konto Authentik X prosi o połączenie, to Ty?" (przycisk;
+   chroni przed wpisaniem cudzego @handle) → zapis `telegram_id`.
+3. Bez username (albo bez wniosku): bot odpowiada jednorazowym kodem (15 min), user wkleja go
+   w polu „Kod z Telegrama" w Authentiku, bot dopasowuje przy najbliższym przebiegu (≤ `POLL_INTERVAL`).
+
+Kierunek bot → user → Authentik jest wymuszony: Authentik nie pokaże tokenu wygenerowanego przez bota.
+
+Grupy: bot **nie może** dodać usera do grupy po id (ograniczenie API). Wysyła jednorazowy link
+(`member_limit=1`, 24 h). Bot musi być adminem grupy z prawem „Invite users".
+
+## Uruchomienie
+
+1. **Authentik — service account**: Directory → Users → *Create Service account* (np. `im-sync`),
+   zapisz token. Nadaj mu uprawnienia `View user` i `Change user` (rola + grupa, albo
+   Admin → Directory → Users → Permissions). Sprawdź: `curl -H "Authorization: Bearer $T" $URL/api/v3/core/users/`.
+2. **Authentik — pola w ustawieniach**: Admin → Customization → Blueprints → import
+   `blueprints/user-settings-im.yaml` (albo zamontuj do `/blueprints/custom/`). Otwórz jako zwykły user
+   `/if/user/#/settings` i sprawdź, czy są pola. Jeśli blueprint się nie zaaplikował, utwórz 3 Prompty
+   z `field_key` `attributes.matrix_handles` / `attributes.telegram_username` / `attributes.telegram_code`
+   ręcznie i dopnij Prompt Stage do `default-user-settings-flow` przed etapem zapisu.
+3. **Matrix**: załóż konto bota, weź access token (Element → Settings → Help & About → Access Token, albo
+   `POST /_matrix/client/v3/login`). Daj botowi w pokojach power level ≥ „Invite". Pokoje mają być
+   **niezaszyfrowane** (bot nie robi E2EE). ID pokoju: Element → Room settings → Advanced.
+4. **Telegram** (opcjonalnie): `@BotFather` → `/newbot`; dodaj bota jako admina do grup; ID grupy
+   (`-100…`) zdobędziesz np. przez `@RawDataBot`.
+5. `cp .env.example .env`, uzupełnij, `docker compose up -d --build`.
+
+Test na sucho (loguje, nic nie wysyła i nie zapisuje; Telegram wyłączony):
+
+```
+docker compose run --rm bot python -m bot.main --dry-run --once
+```
+
+## Testy
+
+```
+pip install -r requirements-dev.txt && pytest
+```
+
+Pokrywają logikę (normalizacja, decyzje o zaproszeniach, kody, dopasowanie) na fake'ach
+Authentika i Matrixa. **Nie pokrywają** realnych API — to kroki E2E poniżej.
+
+## Test E2E (masmiks.wtf)
+
+1. Testowy user w Authentiku → ustawienia → wpisz handle (jeden poprawny, jeden z literówką).
+2. W ≤ 60 s: poprawny dostaje invite, w pokoju jest „Dodano … na prośbę …", `matrix_status` pokazuje
+   błąd dla literówki. Drugi przebieg nic nie robi.
+3. Telegram: ścieżka z @username (przycisk) i ścieżka z kodem → `telegram_id` w atrybutach usera.
+4. **Bezpieczeństwo**: jako zwykły user spróbuj zapisać `attributes.telegram_id` przez API
+   (`PATCH /api/v3/core/users/me/`) — nie może się udać. Jeśli się da, `telegram_id` nie jest
+   godne zaufania i trzeba to zablokować po stronie Authentika.
+
+## Znane ograniczenia
+
+- Bot nie usuwa/nie wyrzuca kont po skasowaniu handle'a z atrybutu.
+- Kto świadomie wyszedł z pokoju po zaproszeniu, nie jest zapraszany ponownie (pamięć w SQLite);
+  utrata `/data/state.db` oznacza ponowne zaproszenie takich osób.
+- Polling co `POLL_INTERVAL` s, bez webhooków z Authentika.
