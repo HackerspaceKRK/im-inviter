@@ -181,6 +181,7 @@ Utrata stanu (SQLite) = bot może ponownie zaprosić osoby, które świadomie wy
   - Telegram: jeszcze nie testowany.
   - Przestrzenie (2026-10-13, testowa „im-sync test" na masmiks.wtf): `MATRIX_SPACES` + `MATRIX_NOTIFY_ROOM` →
     zaproszenie tylko do space (`invite`), wiadomość w pokoju powiadomień, drugi przebieg nic nie robi.
-    Nie sprawdzone: czy zaproszony po akceptacji space sam wchodzi do dziecka „restricted" (wymaga akcji zaproszonego).
+    Potwierdzone: po przyjęciu zaproszenia do space konto samo weszło do dziecka „restricted" (membership `join` w obu),
+    bez osobnego zaproszenia do pokoju (bot zapisał tylko invite do space).
 - hskrk: —
 - hswro: —
