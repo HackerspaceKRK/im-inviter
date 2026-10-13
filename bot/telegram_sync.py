@@ -97,9 +97,19 @@ class TelegramLogic:
         for u in users:
             attrs = u.get("attributes") or {}
             code = attrs.get("telegram_code")
-            if not code or attrs.get("telegram_id"):
+            if not code:
+                continue
+            if attrs.get("telegram_id"):
+                # Jedno konto Telegram na usera. Bez tego komunikatu kod leżałby w polu bez śladu.
+                await self.authentik.update_attributes(
+                    u["pk"],
+                    {"telegram_status": "to konto Authentik ma już połączony Telegram — poproś admina o odłączenie, potem wklej kod ponownie"},
+                    remove=["telegram_code"],
+                )
                 continue
             tg_id = self.state.consume_tg_code(str(code))
+            log.info("kod od usera %s (authentik pk=%s): %s", u["username"], u["pk"],
+                     f"pasuje do tg id={tg_id}" if tg_id is not None else "nieznany albo wygasły")
             if tg_id is None:
                 await self.authentik.update_attributes(
                     u["pk"], {"telegram_status": "zły lub wygasły kod"}, remove=["telegram_code"]

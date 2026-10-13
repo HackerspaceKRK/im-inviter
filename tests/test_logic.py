@@ -198,3 +198,22 @@ def test_space_without_notify_room_is_silent_and_room_still_gets_message():
     run(run_matrix_cycle(az, mx, State(), ["!r"], spaces=["!space"]))
     assert sorted(mx.invites) == [("!r", "@a:x.y"), ("!space", "@a:x.y")]
     assert mx.notices == [("!r", "Dodano @a:x.y na prośbę jan")]
+
+
+def test_code_from_already_linked_user_gets_status_and_is_cleared():
+    az = FakeAuthentik([tg_user(1, telegram_id=99, telegram_code="ABCDEFGH")])
+    assert run(TelegramLogic(az, State(), []).poll_codes()) == 0
+    attrs = az.users[0]["attributes"]
+    assert attrs["telegram_id"] == 99  # nie ruszone
+    assert "telegram_code" not in attrs and "już połączony" in attrs["telegram_status"]
+
+
+def test_new_start_does_not_invalidate_previous_codes_but_is_capped():
+    s = State()
+    first = s.new_tg_code(42, now=1000)
+    second = s.new_tg_code(42, now=1010)  # drugi /start
+    assert s.consume_tg_code(first, now=1020) == 42  # pierwszy nadal działa
+    assert s.consume_tg_code(second, now=1020) == 42
+    codes = [s.new_tg_code(7, now=2000 + i) for i in range(8)]
+    ok = [c for c in codes if s.consume_tg_code(c, now=2100) == 7]
+    assert len(ok) == 5 and ok == codes[-5:]  # zostaje 5 najnowszych

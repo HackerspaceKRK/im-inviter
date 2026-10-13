@@ -13,6 +13,7 @@ import time
 from typing import Optional
 
 CODE_TTL_SECONDS = 15 * 60
+MAX_CODES_PER_ACCOUNT = 5
 _ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # bez 0/O/1/I
 
 
@@ -58,7 +59,14 @@ class State:
     # --- Telegram ---
     def new_tg_code(self, tg_id: int, now: Optional[float] = None) -> str:
         now = time.time() if now is None else now
-        self.db.execute("DELETE FROM tgcodes WHERE tg_id=? OR expires<?", (tg_id, now))
+        # Poprzednie kody tego konta zostają ważne do wygaśnięcia: bot sprawdza kody co ~60 s, więc
+        # ponowny /start nie może unieważniać kodu, który user właśnie wkleił. Cap = nie rośnie w nieskończoność.
+        self.db.execute("DELETE FROM tgcodes WHERE expires<?", (now,))
+        self.db.execute(
+            "DELETE FROM tgcodes WHERE tg_id=? AND hash NOT IN "
+            "(SELECT hash FROM tgcodes WHERE tg_id=? ORDER BY expires DESC LIMIT ?)",
+            (tg_id, tg_id, MAX_CODES_PER_ACCOUNT - 1),
+        )
         code = generate_code()
         self.db.execute(
             "INSERT INTO tgcodes VALUES(?,?,?)", (hash_code(code), tg_id, int(now) + CODE_TTL_SECONDS)
