@@ -1,6 +1,7 @@
 import asyncio
 
 from bot.handles import (
+    pending_age_label,
     find_pending_tg_users, invite_action, normalize_matrix_handles, normalize_tg_username,
 )
 from bot.matrix_sync import run_matrix_cycle, user_link
@@ -34,7 +35,7 @@ def test_normalize_tg_username():
 def test_invite_action():
     assert invite_action("ban", False) == "banned"
     assert invite_action("join", False) == "skip"
-    assert invite_action("invite", False) == "skip"
+    assert invite_action("invite", False) == "pending"  # czeka na akceptację
     assert invite_action(None, False) == "invite"
     assert invite_action("leave", False) == "invite"
     assert invite_action("leave", True) == "left"  # odrzucił/wyszedł: nie ponawiamy, ale zgłaszamy
@@ -318,3 +319,50 @@ def test_forget_keeps_handles_still_listed_by_someone_and_dry_run_does_not_forge
     assert st.was_invited("@b:x.y", "!r")                # dry-run niczego nie kasuje
     run(run_matrix_cycle(az, mx, st, ["!r"]))
     assert st.was_invited("@a:x.y", "!r") and not st.was_invited("@b:x.y", "!r")
+
+
+def _age_invite(st, handle, room, hours):
+    st.mark_invited(handle, room)
+    st.db.execute("UPDATE invited SET ts=? WHERE handle=? AND room=?",
+                  (int(__import__("time").time() - hours * 3600), handle, room))
+    st.db.commit()
+
+
+def test_pending_age_label_is_coarse():
+    assert pending_age_label(30 * 60) == "ponad 1 h"
+    assert pending_age_label(5 * 3600) == "ponad 5 h"
+    assert pending_age_label(30 * 3600) == "ponad dobę"
+    assert pending_age_label(3 * 86400 + 100) == "ponad 3 dni"
+
+
+def test_pending_invite_reported_only_after_threshold():
+    st = State()
+    az, mx = FakeAuthentik([matrix_user("@a:x.y")]), FakeMatrix({("!r", "@a:x.y"): "invite"})
+    _age_invite(st, "@a:x.y", "!r", hours=2)
+    run(run_matrix_cycle(az, mx, st, ["!r"], pending_after_hours=24))
+    assert az.users[0]["attributes"]["matrix_status"] == "ok"  # za wcześnie
+    _age_invite(st, "@a:x.y", "!r", hours=30)
+    run(run_matrix_cycle(az, mx, st, ["!r"], pending_after_hours=24))
+    assert az.users[0]["attributes"]["matrix_status"] == "@a:x.y nie przyjął zaproszenia do: Pokój R (ponad dobę)"
+    assert mx.invites == []  # nie ponawiamy
+
+
+def test_pending_status_clears_when_invite_is_accepted():
+    st = State()
+    az, mx = FakeAuthentik([matrix_user("@a:x.y")]), FakeMatrix({("!r", "@a:x.y"): "invite"})
+    _age_invite(st, "@a:x.y", "!r", hours=30)
+    run(run_matrix_cycle(az, mx, st, ["!r"]))
+    assert "nie przyjął" in az.users[0]["attributes"]["matrix_status"]
+    mx.members[("!r", "@a:x.y")] = "join"
+    run(run_matrix_cycle(az, mx, st, ["!r"]))
+    assert az.users[0]["attributes"]["matrix_status"] == "ok"
+
+
+def test_pending_ignored_for_invites_not_made_by_bot_and_when_disabled():
+    st = State()  # bot nie zapraszał, więc brak zapisu w bazie
+    az, mx = FakeAuthentik([matrix_user("@a:x.y")]), FakeMatrix({("!r", "@a:x.y"): "invite"})
+    run(run_matrix_cycle(az, mx, st, ["!r"], pending_after_hours=1))
+    assert az.users[0]["attributes"]["matrix_status"] == "ok"
+    _age_invite(st, "@a:x.y", "!r", hours=500)
+    run(run_matrix_cycle(az, mx, st, ["!r"], pending_after_hours=0))  # 0 = wyłączone
+    assert az.users[0]["attributes"]["matrix_status"] == "ok"

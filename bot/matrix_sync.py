@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from html import escape as html_escape
 from typing import Any, Dict, List, Optional
@@ -9,7 +10,7 @@ from urllib.parse import quote
 
 import httpx
 
-from .handles import invite_action, normalize_matrix_handles
+from .handles import invite_action, normalize_matrix_handles, pending_age_label
 
 log = logging.getLogger("matrix")
 
@@ -69,10 +70,12 @@ def _err(e: Exception) -> str:
 async def run_matrix_cycle(
     authentik: Any, matrix: Matrix, state: Any, rooms: List[str], dry_run: bool = False,
     spaces: Optional[List[str]] = None, notify_room: Optional[str] = None,
+    pending_after_hours: float = 24,
 ) -> Dict[str, int]:
     """Jeden przebieg: dla każdego usera z handle'ami zaproś brakujących. Zwraca statystyki.
 
     rooms  — zaproszenie + wiadomość „Dodano …" w tym samym pokoju.
+    pending_after_hours — po tylu godzinach nieprzyjęte zaproszenie trafia do matrix_status (0 = wyłączone).
     spaces — samo zaproszenie do przestrzeni (pokoje-dzieci wpuszczają członków space same, o ile
              mają regułę „restricted"); wiadomość idzie do notify_room, a bez niego nie ma jej wcale.
     """
@@ -118,6 +121,15 @@ async def run_matrix_cycle(
                         msgs.append(f"{handle} odrzucił zaproszenie lub wyszedł z: {await label(room)}")
                         if state.report_once(f"left:{handle}:{room}"):
                             log.info("%s odrzucił/wyszedł z %s (user %s)", handle, room, username)
+                    elif action == "pending":
+                        # Zaproszenie czeka na akceptację. Matrix go nie wygasza ani nie da się go „ponowić",
+                        # więc tylko pokazujemy w statusie, jak długo wisi (nagabywać możemy tylko własne zaproszenia).
+                        ts = state.invited_at(handle, room)
+                        if pending_after_hours and ts is not None and time.time() - ts >= pending_after_hours * 3600:
+                            age = pending_age_label(time.time() - ts)
+                            msgs.append(f"{handle} nie przyjął zaproszenia do: {await label(room)} ({age})")
+                            if state.report_once(f"pending:{handle}:{room}"):
+                                log.info("%s nie przyjął zaproszenia do %s (%s)", handle, room, age)
                     elif action == "invite":
                         if dry_run:
                             log.info("[dry-run] zaprosiłbym %s do %s (user %s)", handle, room, username)

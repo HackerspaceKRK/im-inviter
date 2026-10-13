@@ -148,6 +148,12 @@ z SQLite, osobna nazwa projektu compose wynika z nazwy katalogu).
   co minutę kogoś, kto powiedział „nie"), ale zapisuje w `matrix_status` usera: „@x odrzucił zaproszenie lub wyszedł z: <nazwa>".
 - **Ponowne zaproszenie:** user usuwa handle z ustawień Authentika i dopisuje z powrotem. Bot zapomina handle'e, których
   nikt już nie ma wpisanych (przy najbliższym przebiegu, ≤ `POLL_INTERVAL`), więc dopisany handle jest zapraszany od nowa.
+- **Nieprzyjęte zaproszenia** (stan `invite`): zaproszenia w Matrixie nie wygasają i nie da się ich „ponowić", więc bot
+  nic z nimi nie robi, ale po `MATRIX_PENDING_AFTER_HOURS` (domyślnie 24, `0` = wyłączone) wpisuje w `matrix_status`:
+  „@x nie przyjął zaproszenia do: <nazwa> (ponad dobę / ponad 3 dni)". Opis wieku jest gruby, żeby status nie zmieniał
+  się co godzinę. Dotyczy tylko zaproszeń wysłanych przez bota (cudzych nie nagabuje). Po akceptacji status wraca do `ok`.
+  Test na żywo: usuń i dopisz handle (nowe zaproszenie), nie przyjmuj, uruchom bota z `MATRIX_PENDING_AFTER_HOURS=0.02`
+  i po ~2 minutach zobacz atrybut `matrix_status` w Authentiku.
 - Zapominanie dotyczy wyłącznie pamięci bota (SQLite). **Nikogo nie wyrzuca** z pokoi (usuwanie jest osobną, jeszcze
   niezaimplementowaną funkcją).
 - Ręcznie, bez ruszania Authentika: zaproś konto z Elementa albo skasuj parę z bazy

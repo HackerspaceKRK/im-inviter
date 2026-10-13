@@ -50,6 +50,11 @@ class State:
         )
         self.db.commit()
 
+    def invited_at(self, handle: str, room: str) -> Optional[int]:
+        """Kiedy bot zaprosił tę parę (unix ts) albo None, gdy nie zapraszał (np. zaprosił ktoś inny)."""
+        r = self.db.execute("SELECT ts FROM invited WHERE handle=? AND room=?", (handle, room)).fetchone()
+        return r[0] if r else None
+
     def forget_missing(self, current_handles) -> list:
         """Zapomina handle'e, których nikt już nie ma wpisanych w Authentiku (zwraca ich listę).
 
@@ -60,7 +65,7 @@ class State:
         gone = sorted(known - set(current_handles))
         for h in gone:
             self.db.execute("DELETE FROM invited WHERE handle=?", (h,))
-            for prefix in (f"ban:{h}:", f"err:{h}:"):
+            for prefix in (f"ban:{h}:", f"err:{h}:", f"left:{h}:", f"pending:{h}:"):
                 self.db.execute("DELETE FROM reported WHERE substr(key,1,?)=?", (len(prefix), prefix))
         if gone:
             self.db.commit()

@@ -27,6 +27,7 @@ async def amain(dry_run: bool, once: bool) -> None:
     rooms = _csv("MATRIX_ROOMS")
     spaces = _csv("MATRIX_SPACES")
     notify_room = os.environ.get("MATRIX_NOTIFY_ROOM", "").strip() or None
+    pending_after = float(os.environ.get("MATRIX_PENDING_AFTER_HOURS", "24"))
     matrix = (
         Matrix(os.environ["MATRIX_HOMESERVER"], os.environ["MATRIX_TOKEN"])
         if rooms or spaces else None
@@ -59,7 +60,7 @@ async def amain(dry_run: bool, once: bool) -> None:
             try:
                 if matrix:
                     log.info("matrix: %s", await run_matrix_cycle(
-                        authentik, matrix, state, rooms, dry_run, spaces, notify_room))
+                        authentik, matrix, state, rooms, dry_run, spaces, notify_room, pending_after))
                 if tg_logic:
                     await tg_logic.poll_codes()
             except Exception:
