@@ -75,6 +75,9 @@ def main() -> None:
     p.add_argument("--once", action="store_true", help="jeden przebieg i wyjście")
     a = p.parse_args()
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"), format="%(asctime)s %(name)s %(message)s")
+    # httpx loguje pełne URL-e na INFO, a w URL-ach Telegrama jest token bota: nigdy do logów.
+    for noisy in ("httpx", "httpcore"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
     asyncio.run(amain(a.dry_run, a.once))
 
 
