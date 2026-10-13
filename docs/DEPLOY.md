@@ -26,9 +26,15 @@ Docker + compose (`docker compose version`), dostęp do HTTPS Authentika, homese
 
 ## 1. Authentik: service account (raz na instancję)
 
-W panelu admina: **Directory → Users → Create Service account** (nazwa `im-sync`, bez wygasania tokenu).
-Skopiuj token. Nadaj uprawnienia **View user** i **Change user** (np. rola z tymi uprawnieniami
-przypisana do grupy, w której jest ten account).
+W panelu admina:
+
+1. **Directory → Users → Create Service account** (nazwa `im-sync`). Token pokazany przy tworzeniu
+   **zignoruj** — ma intencję *App password*, a API Authentika przyjmuje tylko intencję *API*
+   (objaw: `{"detail":"Token invalid/expired"}`, HTTP 403).
+2. **Directory → Tokens and App passwords → Create**: Identifier `im-sync-api`, User = `im-sync`,
+   **Intent = API Token**, *Expiring* wyłączone. Potem „Copy Key" → to jest `AUTHENTIK_TOKEN`.
+3. Nadaj uprawnienia **View user** i **Change user** (np. rola z tymi uprawnieniami
+   przypisana do grupy, w której jest ten account).
 
 Weryfikacja (z hosta):
 

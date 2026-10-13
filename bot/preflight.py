@@ -34,7 +34,8 @@ async def check_authentik(c: httpx.AsyncClient) -> bool:
     h = {"Authorization": f"Bearer {os.environ['AUTHENTIK_TOKEN']}"}
     r = await c.get(f"{url}/api/v3/core/users/me/", headers=h)
     if not say(r.status_code == 200, f"Authentik: token działa (HTTP {r.status_code})",
-               "zły URL albo token; token musi być typu API, z service-accounta"):
+               "token nieznany albo wygasły. Musi mieć Intent = API Token (Directory → Tokens and "
+               "App passwords); token wyświetlony przy tworzeniu service-accounta to App password i nie działa"):
         return False
     who = r.json()["user"]
     say(True, f"Authentik: zalogowany jako {who['username']}")

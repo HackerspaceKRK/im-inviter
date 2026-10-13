@@ -39,8 +39,10 @@ Grupy: bot **nie może** dodać usera do grupy po id (ograniczenie API). Wysyła
 
 ## Uruchomienie
 
-1. **Authentik — service account**: Directory → Users → *Create Service account* (np. `im-sync`),
-   zapisz token. Nadaj mu uprawnienia `View user` i `Change user` (rola + grupa, albo
+1. **Authentik — service account + token API**: Directory → Users → *Create Service account* (np. `im-sync`),
+   potem Directory → Tokens and App passwords → *Create* z **Intent = API Token** dla tego usera
+   (token z kreatora service-accounta to App password i API go odrzuca: `Token invalid/expired`).
+   Nadaj mu uprawnienia `View user` i `Change user` (rola + grupa, albo
    Admin → Directory → Users → Permissions). Sprawdź: `curl -H "Authorization: Bearer $T" $URL/api/v3/core/users/`.
 2. **Authentik — pola w ustawieniach**: Admin → Customization → Blueprints → import
    `blueprints/user-settings-im.yaml` (albo zamontuj do `/blueprints/custom/`). Otwórz jako zwykły user
