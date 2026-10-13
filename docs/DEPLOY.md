@@ -135,5 +135,8 @@ Utrata stanu (SQLite) = bot może ponownie zaprosić osoby, które świadomie wy
     Directory → Tokens z Intent = API Token → działa (potwierdzone).
   - Nowy service account nie ma żadnych uprawnień: `GET /core/users/me/` działa (200), ale lista
     userów → 403, dopóki nie dostanie View user (i Change user do zapisu atrybutów).
+  - Authentik 2026.8.3: rola z View/Change user przypisana **bezpośrednio do usera** `im-sync`
+    wystarczyła (`/core/users/me/` → `roles: ['im-sync']`, `groups: []`). Sama rola nieprzypięta do
+    nikogo (`roles: []`) daje 403 mimo że istnieje. Preflight: wszystko OK; `--dry-run --once`: bot widzi userów.
 - hskrk: —
 - hswro: —
