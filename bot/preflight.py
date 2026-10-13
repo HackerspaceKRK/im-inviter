@@ -42,9 +42,19 @@ async def check_authentik(c: httpx.AsyncClient) -> bool:
     r = await c.get(f"{url}/api/v3/core/users/", headers=h, params={"page_size": 1})
     ok &= say(r.status_code == 200, f"Authentik: odczyt listy userów (HTTP {r.status_code})",
               "nadaj service-accountowi uprawnienie 'View user'")
-    r = await c.get(f"{url}/api/v3/flows/instances/default-user-settings-flow/", headers=h)
-    say(r.status_code in (200, 403), "Authentik: flow default-user-settings-flow istnieje"
-        if r.status_code != 404 else "Authentik: brak flow default-user-settings-flow (blueprint nie ma gdzie się wpiąć)")
+    # Co zobaczy user w ustawieniach? Uruchamiamy flow z brandu i czytamy pola pierwszego etapu.
+    r = await c.get(f"{url}/api/v3/core/brands/current/", headers=h)
+    slug = r.json().get("flow_user_settings") if r.status_code == 200 else None
+    if not slug:
+        ok &= say(False, "Authentik: brand nie ma ustawionego flow user settings", "Admin → System → Brands")
+        return ok
+    r = await c.get(f"{url}/api/v3/flows/executor/{slug}/", headers=h)
+    fields = [f.get("field_key") for f in (r.json().get("fields") or [])] if r.status_code == 200 else []
+    wanted = ["attributes.matrix_handles", "attributes.telegram_username", "attributes.telegram_code"]
+    missing = [w for w in wanted if w not in fields]
+    ok &= say(not missing, f"Authentik: pola IM widoczne w ustawieniach usera (flow {slug})",
+              "brak: " + ", ".join(missing) + " — zaaplikuj blueprint (Admin → Customization → Blueprints) "
+              "albo dodaj prompty ręcznie (docs/DEPLOY.md, krok 2)")
     return ok
 
 
