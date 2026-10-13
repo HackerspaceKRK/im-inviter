@@ -121,6 +121,8 @@ class TelegramLogic:
             return
         u = update.effective_user
         text, pk = await self.start_reply(u.id, u.username)
+        log.info("/start od tg id=%s username=%s -> %s", u.id, u.username,
+                 f"pytanie o potwierdzenie (authentik pk={pk})" if pk is not None else "bez dopasowania")
         markup = None
         if pk is not None:
             markup = InlineKeyboardMarkup(
@@ -137,6 +139,7 @@ class TelegramLogic:
             return
         pk = int(q.data.split(":", 1)[1])
         u = q.from_user
+        log.info("potwierdzenie od tg id=%s username=%s dla authentik pk=%s", u.id, u.username, pk)
         users = await self.authentik.list_users()
         # Powtórna weryfikacja w chwili kliknięcia: wniosek nadal istnieje i pasuje do username.
         pending = [m for m in find_pending_tg_users(users, u.username or "") if m["pk"] == pk]
