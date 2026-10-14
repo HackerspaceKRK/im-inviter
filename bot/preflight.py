@@ -80,6 +80,14 @@ async def check_matrix(c: httpx.AsyncClient) -> bool:
     me, ok = r.json()["user_id"], True
     say(True, f"Matrix: bot to {me}")
     for room in list(dict.fromkeys(rooms + spaces + ([notify] if notify else []))):  # bez duplikatów
+        if room.startswith("#"):  # alias → ID (API stanu przyjmuje tylko ID)
+            ra = await c.get(f"{base}/directory/room/{quote(room, safe='')}", headers=h)
+            if ra.status_code != 200:
+                ok &= say(False, f"Matrix {room}: nie da się rozwiązać aliasu (HTTP {ra.status_code})",
+                          "sprawdź alias albo podaj ID pokoju (!abc:serwer)")
+                continue
+            say(True, f"Matrix {room}: alias → {ra.json()['room_id']}")
+            room = ra.json()["room_id"]
         rq = quote(room, safe="")
         kind = "przestrzeń" if room in spaces else ("pokój powiadomień" if room == notify else "pokój")
         r = await c.get(f"{base}/rooms/{rq}/state/m.room.member/{quote(me, safe='')}", headers=h)

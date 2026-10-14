@@ -366,3 +366,34 @@ def test_pending_ignored_for_invites_not_made_by_bot_and_when_disabled():
     _age_invite(st, "@a:x.y", "!r", hours=500)
     run(run_matrix_cycle(az, mx, st, ["!r"], pending_after_hours=0))  # 0 = wyłączone
     assert az.users[0]["attributes"]["matrix_status"] == "ok"
+
+
+def test_matrix_resolves_aliases_once_and_uses_room_id_in_api_calls():
+    import httpx
+    from bot.matrix_sync import Matrix
+    calls = []
+
+    def handler(req):
+        calls.append((req.method, req.url.path))
+        if "/directory/room/" in req.url.path:
+            return httpx.Response(200, json={"room_id": "!abc:hackerspace.pl"})
+        if req.url.path.endswith("/invite"):
+            return httpx.Response(200, json={})
+        return httpx.Response(404, json={})
+
+    mx = Matrix("https://hs.test", "t", client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    assert run(mx.membership("#hskrk:hackerspace.pl", "@a:x.y")) is None
+    run(mx.invite("#hskrk:hackerspace.pl", "@a:x.y"))
+    run(mx.invite("!raw:x.y", "@a:x.y"))  # ID bez zmian, bez zapytania o alias
+    directory = [c for c in calls if "/directory/room/" in c[1]]
+    assert len(directory) == 1  # alias rozwiązany raz (cache)
+    assert all("%23" not in c[1] and "#" not in c[1] for c in calls if "/rooms/" in c[1])  # w ścieżce ID, nie alias
+    assert any("!abc" in c[1] or "%21abc" in c[1] for c in calls if c[1].endswith("/invite"))
+
+
+def test_not_in_room_error_has_actionable_message():
+    import httpx
+    from bot.matrix_sync import _err
+    req = httpx.Request("POST", "https://x")
+    resp = httpx.Response(403, json={"errcode": "M_FORBIDDEN", "error": "User @b:x not in room !r:y, and room previews are disabled"}, request=req)
+    assert "bot nie jest w tym pokoju" in _err(httpx.HTTPStatusError("e", request=req, response=resp))

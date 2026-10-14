@@ -21,8 +21,24 @@ class Matrix:
         self.client = client or httpx.AsyncClient(
             headers={"Authorization": f"Bearer {token}"}, timeout=20
         )
+        self._rids: Dict[str, str] = {}
+
+    async def rid(self, room: str) -> str:
+        """Alias (`#pokoj:serwer`) → ID pokoju (`!abc:serwer`); ID zwraca bez zmian.
+
+        API zapraszania/stanu/wysyłania przyjmuje tylko ID — z aliasem Synapse odpowiada mylącym
+        „User … not in room". Wynik jest w pamięci do restartu bota.
+        """
+        if not room.startswith("#"):
+            return room
+        if room not in self._rids:
+            r = await self.client.get(f"{self.base}/directory/room/{quote(room, safe='')}")
+            r.raise_for_status()
+            self._rids[room] = r.json()["room_id"]
+        return self._rids[room]
 
     async def membership(self, room: str, mxid: str) -> Optional[str]:
+        room = await self.rid(room)
         r = await self.client.get(
             f"{self.base}/rooms/{quote(room, safe='')}/state/m.room.member/{quote(mxid, safe='')}"
         )
@@ -32,16 +48,19 @@ class Matrix:
         return r.json().get("membership")
 
     async def room_name(self, room: str) -> Optional[str]:
+        room = await self.rid(room)
         r = await self.client.get(f"{self.base}/rooms/{quote(room, safe='')}/state/m.room.name")
         return r.json().get("name") if r.status_code == 200 else None
 
     async def invite(self, room: str, mxid: str) -> None:
+        room = await self.rid(room)
         r = await self.client.post(
             f"{self.base}/rooms/{quote(room, safe='')}/invite", json={"user_id": mxid}
         )
         r.raise_for_status()
 
     async def notice(self, room: str, text: str, html: Optional[str] = None) -> None:
+        room = await self.rid(room)
         content: Dict[str, Any] = {"msgtype": "m.notice", "body": text}
         if html:
             content.update({"format": "org.matrix.custom.html", "formatted_body": html})
@@ -61,9 +80,12 @@ def user_link(mxid: str) -> str:
 def _err(e: Exception) -> str:
     if isinstance(e, httpx.HTTPStatusError):
         try:
-            return f"{e.response.status_code} {e.response.json().get('error', '')}".strip()
+            err = e.response.json().get("error", "")
         except Exception:
             return str(e.response.status_code)
+        if e.response.status_code == 403 and "not in room" in err:
+            return "bot nie jest w tym pokoju albo nie ma w nim uprawnień (dodaj go i nadaj power level ≥ invite)"
+        return f"{e.response.status_code} {err}".strip()
     return str(e)
 
 
