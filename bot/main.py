@@ -21,7 +21,7 @@ def _csv(name: str) -> List[str]:
     return [x.strip() for x in os.environ.get(name, "").split(",") if x.strip()]
 
 
-async def amain(dry_run: bool, once: bool) -> None:
+async def amain(dry_run: bool, once: bool, audit: bool = False) -> None:
     authentik = Authentik(os.environ["AUTHENTIK_URL"], os.environ["AUTHENTIK_TOKEN"])
     state = State(os.environ.get("DB_PATH", "/data/state.db"))
     interval = int(os.environ.get("POLL_INTERVAL", "60"))
@@ -68,7 +68,7 @@ async def amain(dry_run: bool, once: bool) -> None:
                 if time.time() - last_migration >= INVENTORY_EVERY:
                     last_migration = time.time()
                     try:
-                        await run_migration(authentik, dry_run)
+                        await run_migration(authentik, dry_run, audit)
                     except Exception:
                         log.exception("migracja atrybutów nie powiodła się (bot działa dalej)")
                 if matrix:
@@ -92,12 +92,14 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--dry-run", action="store_true", help="tylko loguj, nic nie wysyłaj ani nie zapisuj")
     p.add_argument("--once", action="store_true", help="jeden przebieg i wyjście")
+    p.add_argument("--audit", action="store_true",
+                   help="w logu migracji wypisz pełny inwentarz atrybutów (klucz×userów); tylko odczyt")
     a = p.parse_args()
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"), format="%(asctime)s %(name)s %(message)s")
     # httpx loguje pełne URL-e na INFO, a w URL-ach Telegrama jest token bota: nigdy do logów.
     for noisy in ("httpx", "httpcore"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
-    asyncio.run(amain(a.dry_run, a.once))
+    asyncio.run(amain(a.dry_run, a.once, a.audit))
 
 
 if __name__ == "__main__":

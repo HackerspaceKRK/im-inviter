@@ -2,7 +2,8 @@
 
 Uruchamiana przy starcie bota (i potem co godzinę, bo stary blueprint/flow może jeszcze zapisać stare klucze).
 Jest idempotentna: user, który ma już nowy format, nie jest zapisywany. Zmienia WYŁĄCZNIE atrybuty bota;
-nieznanych kluczy (np. cudzych narzędzi) nie rusza, tylko zgłasza je w inwentarzu do ręcznego przejrzenia.
+nieznanych kluczy (np. cudzych narzędzi) nie rusza, tylko zgłasza je w ostrzeżeniu do ręcznego przejrzenia
+(pełny inwentarz kluczy tylko z `--audit`).
 """
 from __future__ import annotations
 
@@ -66,17 +67,28 @@ def plan_migration(attrs: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str], Li
             notes.append("telegram_username: usunięto (nowy klucz już ma wartość lub stary jest pusty)")
         remove.append("telegram_username")
 
-    # telegramIDs: scal stare znaczniki i ujednolić zapis do listy tekstów (tablica, „1, 2" albo liczby → ["1","2"]).
+    # telegramIDs to LISTA WSPÓŁDZIELONA z innymi narzędziami, więc zmieniamy ją minimalnie:
+    #  - tablicę zostawiamy bez zmian (nie konwertujemy liczb na teksty, nie usuwamy duplikatów);
+    #  - tylko napis/liczbę (np. "1, 2"; psuje usermanager, który oczekuje tablicy) zamieniamy na tablicę tekstów;
+    #  - stare znaczniki (telegram_id, telegramVerifiedId) DOPISUJEMY do listy, jeśli jeszcze ich tam nie ma.
+    current = attrs.get("telegramIDs")
     legacy_present = [k for k in ID_LEGACY if k in attrs]
-    if legacy_present or "telegramIDs" in attrs:
-        merged = normalize_tg_ids(attrs.get("telegramIDs"), *(attrs.get(k) for k in legacy_present))
-        if merged != attrs.get("telegramIDs") and (merged or "telegramIDs" in attrs):
-            set_["telegramIDs"] = merged
-            notes.append("telegramIDs: " + ("scalone ze starymi kluczami i " if legacy_present else "")
-                         + f"ujednolicone do listy tekstów ({len(merged)} kont)")
-        for k in legacy_present:
-            remove.append(k)
-            notes.append(f"{k} → telegramIDs (klucz usunięty)")
+    if isinstance(current, list):
+        merged = list(current)
+    else:
+        merged = normalize_tg_ids(current)
+        if current not in _EMPTY and "telegramIDs" in attrs:
+            notes.append("telegramIDs: napis/liczba → lista tekstów")
+    present = {str(x) for x in merged}
+    appended = [t for t in normalize_tg_ids(*(attrs.get(k) for k in legacy_present)) if t not in present]
+    merged += appended
+    if merged != current and (merged or "telegramIDs" in attrs):
+        set_["telegramIDs"] = merged
+    if appended:
+        notes.append(f"telegramIDs: dopisano ze starych kluczy: {', '.join(appended)}")
+    for k in legacy_present:
+        remove.append(k)
+        notes.append(f"{k}: usunięto (wartość scalona do telegramIDs)")
 
     for key in DROP:
         if key in attrs:
@@ -91,8 +103,11 @@ def plan_migration(attrs: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str], Li
     return set_, remove, notes
 
 
-async def run_migration(authentik: Any, dry_run: bool = False) -> Dict[str, Any]:
-    """Przegląda WSZYSTKICH userów (także nieaktywnych) i naprawia atrybuty bota. Zwraca podsumowanie."""
+async def run_migration(authentik: Any, dry_run: bool = False, audit: bool = False) -> Dict[str, Any]:
+    """Przegląda WSZYSTKICH userów (także nieaktywnych) i naprawia atrybuty bota. Zwraca podsumowanie.
+
+    audit=True dodatkowo wypisuje pełny inwentarz kluczy (klucz×userów). Domyślnie log pokazuje tylko to, co bot
+    zmienia, i ostrzeżenie o nieznanych kluczach; inwentarz jest wyłącznie do odczytu, niczego nie zmienia."""
     users = await authentik.list_users(include_inactive=True)
     inventory: Counter = Counter()
     migrated = 0
@@ -119,8 +134,9 @@ async def run_migration(authentik: Any, dry_run: bool = False) -> Dict[str, Any]
     handled = KNOWN_KEYS | set(RENAMES) | set(DROP) | set(ID_LEGACY)  # także stare klucze, które właśnie migrujemy
     unknown = {k: n for k, n in inventory.items() if k not in handled and not k.startswith("goauthentik.io/")}
     log.info("migracja: userów %d, zmieniono %d", len(users), migrated)
-    log.info("atrybuty w Authentiku (klucz×userów): %s",
-             ", ".join(f"{k}×{n}" for k, n in sorted(inventory.items())) or "brak")
+    if audit:
+        log.info("atrybuty w Authentiku (klucz×userów): %s",
+                 ", ".join(f"{k}×{n}" for k, n in sorted(inventory.items())) or "brak")
     if unknown:
         log.warning("nieznane atrybuty (do ręcznego przejrzenia, bot ich nie rusza): %s",
                     ", ".join(f"{k}×{n}" for k, n in sorted(unknown.items())))

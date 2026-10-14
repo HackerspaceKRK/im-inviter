@@ -186,7 +186,8 @@ scala stare klucze z nowymi i usuwa stare (szczegóły i tabela w `docs/usermana
 
 Kolejność wdrożenia na instancji z istniejącymi danymi:
 1. **Podgląd:** `docker compose run --rm bot python -m bot.main --dry-run --once` → w logu `[dry-run] migracja atrybutów usera …`
-   dla każdego, kogo to dotyczy, oraz inwentarz kluczy i ewentualne „nieznane atrybuty".
+   dla każdego, kogo to dotyczy, oraz ewentualne ostrzeżenie „nieznane atrybuty" (klucze, których bot nie zna i nie rusza).
+   Pełny inwentarz wszystkich kluczy u userów (klucz×userów, tylko do odczytu): dodaj flagę `--audit`.
 2. **Zaktualizuj blueprint** (Admin → Customization → Blueprints → treść z `blueprints/user-settings-im.yaml`, *Apply*):
    pola formularza zapisują teraz `attributes.matrixHandles` / `telegramUsername` / `telegramCode`. Podpowiedzi w polach mają
    fallback na stare klucze, więc userzy nie zobaczą pustych formularzy w trakcie przejścia.

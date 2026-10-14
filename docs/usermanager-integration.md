@@ -7,7 +7,9 @@ Kontrakt danych i plan zmian. Źródłem prawdy jest Authentik (atrybuty usera);
 
 1. **Telegram:** wyłącznie lista `telegramIDs` (inne narzędzia ją czytają). Bot dopisuje do niej ID po weryfikacji;
    **nie ma osobnego znacznika „zweryfikowane"** ani limitu jednego konta na usera (usermanager też pozwala na wiele).
-   Lista bywa zapisana jako tablica albo napis „288245411, 111111111"; bot czyta oba i zawsze zapisuje tablicę tekstów.
+   Lista bywa zapisana jako tablica albo napis „288245411, 111111111"; bot czyta oba. Jest to lista współdzielona z innymi
+   narzędziami, więc bot zmienia ją minimalnie: istniejących tablic **nie przepisuje** (liczby zostają liczbami, duplikatów
+   nie usuwa), tylko dopisuje nowe ID (jako tekst) i zamienia napis na tablicę.
 2. **Ręczny invite:** kolejka w atrybucie usera, wykonuje ją bot przy najbliższym przebiegu (≤ `POLL_INTERVAL`).
    `usermanager` nie dostaje żadnych sekretów Matrixa; uprawnienia pilnuje Authentik.
 3. **Nazwy:** camelCase, zgodnie z konwencją hackerspace'u (`telegramIDs`, `mifareCardId`, …). Pierwotnie planowano snake_case,
@@ -47,11 +49,11 @@ zapisać stare klucze). Jest idempotentna: user w nowym formacie nie jest zapisy
 |---|---|
 | `matrix_handles` | **scala** z `matrixHandles` (nowe pierwsze, bez duplikatów, znormalizowane), stary usuwa |
 | `telegram_username` | → `telegramUsername` (gdy nowy pusty), stary usuwa |
-| `telegram_id`, `telegramVerifiedId` | **scala** do `telegramIDs` (lista tekstów, bez duplikatów), klucz usuwa |
+| `telegram_id`, `telegramVerifiedId` | **dopisuje** do `telegramIDs` (jeśli ID jeszcze nie ma; istniejących elementów nie zmienia), klucz usuwa |
 | `matrix_status`, `matrix_accounts`, `matrix_invite_*`, `telegram_code`, `telegram_status` | **usuwa** (pochodne/jednorazowe, bot policzy od nowa) |
 | puste `matrixHandles` / `telegramUsername` / `telegramCode` (`""`, `[]`) | usuwa (flow ustawień zapisuje puste stringi dla nietkniętych pól) |
 
-Cudzych kluczy (usermanager, Authentik) **nie rusza**. W logu startowym dostajesz inwentarz „klucz×userów" i listę
+Cudzych kluczy (usermanager, Authentik) **nie rusza**. W logu startowym dostajesz listę
 „nieznanych atrybutów do ręcznego przejrzenia" (np. literówki albo pozostałości po innych narzędziach).
 Podgląd bez zmian: `docker compose run --rm bot python -m bot.main --dry-run --once` (linie `[dry-run] migracja atrybutów usera …`).
 

@@ -42,10 +42,11 @@ def find_linked_user(users: List[dict], tg_id: int, exclude_pk: Optional[int] = 
 
 
 def add_tg_id(attrs: dict, tg_id: int) -> None:
-    """Dopisuje ID do `telegramIDs` (stringi, bez duplikatów); istniejących wpisów nie ruszamy ani nie usuwamy.
+    """Dopisuje ID do `telegramIDs` (jako tekst); istniejących wpisów nie ruszamy, nie usuwamy ani nie przepisujemy.
     Działa na ŚWIEŻYCH atrybutach (mutate w update_attributes), więc nie gubi równoległych zmian admina."""
-    ids = normalize_tg_ids(attrs.get("telegramIDs"))
-    if str(tg_id) not in ids:
+    current = attrs.get("telegramIDs")
+    ids = list(current) if isinstance(current, list) else normalize_tg_ids(current)  # tablicy nie przepisujemy
+    if str(tg_id) not in {str(x) for x in ids}:
         ids.append(str(tg_id))
     attrs["telegramIDs"] = ids
 

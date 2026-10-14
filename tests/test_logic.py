@@ -738,7 +738,7 @@ def test_migration_is_idempotent_and_new_username_wins_over_old():
     attrs = {"telegram_username": "@stary_user", "telegramUsername": "@nowy_user", "telegramIDs": [288245411, "111111111"]}
     out = _apply(attrs)
     assert out["telegramUsername"] == "@nowy_user"
-    assert out["telegramIDs"] == ["288245411", "111111111"]               # liczby → teksty (jak zapisuje usermanager)
+    assert out["telegramIDs"] == [288245411, "111111111"]                 # tablicy nie przepisujemy (liczba zostaje liczbą)
     assert plan_migration(out) == ({}, [], [])                            # drugi raz: nic do roboty
 
 
@@ -797,7 +797,7 @@ def test_link_adds_id_to_telegram_ids_without_touching_manual_entries_and_clears
     az = FakeAuthentik([tg_user(1, telegramIDs=["111", 222], telegramUsername="@Jan_Kowalski")])
     ok, _ = run(TelegramLogic(az, State(), []).link(1, 99, tg_username="jan_kowalski"))
     attrs = az.users[0]["attributes"]
-    assert ok and attrs["telegramIDs"] == ["111", "222", "99"]           # ręczne zostają (jako teksty), nowe dopisane
+    assert ok and attrs["telegramIDs"] == ["111", 222, "99"]             # cudze wpisy bez zmian (222 zostaje liczbą), nowe dopisane
     assert "telegramUsername" not in attrs                                # wniosek spełniony: nie wisi jako oczekujący
     run(TelegramLogic(az, State(), []).link(1, 99))
     assert attrs["telegramIDs"].count("99") == 1                          # bez duplikatów
@@ -834,3 +834,47 @@ def test_admin_registered_telegram_id_counts_as_linked_for_start_and_groups():
     assert "już połączone" in run(logic.start_reply(99, "x"))[0]
     assert run(logic.groups_reply(99)) == (True, "")
     assert run(logic.groups_reply(12345))[0] is False
+
+
+# ---------- telegramIDs: konserwatywnie (lista współdzielona z innymi narzędziami) ----------
+def test_migration_never_rewrites_an_existing_array():
+    for ids in (["1", "2"], [1, 2], ["1", 1, "2", "2"], []):              # liczby, duplikaty, pusta: wszystko bez zmian
+        assert plan_migration({"telegramIDs": ids}) == ({}, [], [])
+
+
+def test_migration_converts_only_string_form_to_array():
+    set_, remove, _ = plan_migration({"telegramIDs": "288245411, 111111111"})
+    assert set_ == {"telegramIDs": ["288245411", "111111111"]} and remove == []
+    set_, _, _ = plan_migration({"telegramIDs": 288245411})
+    assert set_ == {"telegramIDs": ["288245411"]}
+
+
+def test_migration_appends_legacy_ids_to_existing_array_without_touching_its_elements():
+    attrs = {"telegramIDs": [111, "222"], "telegram_id": "222", "telegramVerifiedId": 333}
+    set_, remove, _ = plan_migration(attrs)
+    assert set_ == {"telegramIDs": [111, "222", "333"]}                   # 222 już jest (porównanie jako tekst), 333 dopisane
+    assert sorted(remove) == ["telegramVerifiedId", "telegram_id"]
+    set_, remove, _ = plan_migration({"telegram_id": 5})                  # brak listy: powstaje z samego znacznika
+    assert set_ == {"telegramIDs": ["5"]} and remove == ["telegram_id"]
+
+
+def test_add_tg_id_does_not_rewrite_existing_array_elements():
+    from bot.telegram_sync import add_tg_id
+    attrs = {"telegramIDs": [111, "111", "222"]}
+    add_tg_id(attrs, 111)                                                  # już jest (jako liczba i tekst): bez zmian
+    assert attrs["telegramIDs"] == [111, "111", "222"]
+    add_tg_id(attrs, 333)
+    assert attrs["telegramIDs"] == [111, "111", "222", "333"]
+
+
+def test_inventory_is_logged_only_with_audit_but_unknown_keys_always(caplog):
+    import logging
+    az = FakeAuthentik([{"pk": 1, "username": "u", "attributes": {"cardId": 1, "mifareCardId": ["x"]}}])
+    with caplog.at_level(logging.INFO, logger="migrate"):
+        run(run_migration(az))
+    text = "\n".join(r.getMessage() for r in caplog.records)
+    assert "klucz×userów" not in text and "nieznane atrybuty" in text and "cardId×1" in text
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="migrate"):
+        run(run_migration(az, audit=True))
+    assert "klucz×userów" in "\n".join(r.getMessage() for r in caplog.records)
