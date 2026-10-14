@@ -524,8 +524,8 @@ def _fake_update(chat_type):
     return upd, SimpleNamespace(bot=SimpleNamespace(username="hsowyzapraszacz_bot")), sent
 
 
-def test_commands_in_group_get_instructions_not_silence():
-    logic = TelegramLogic(None, State(), [-1], settings_url=SETTINGS)
+def test_commands_in_configured_group_get_instructions_not_silence():
+    logic = TelegramLogic(None, State(), [-5], settings_url=SETTINGS)  # _fake_update używa czatu -5
     for handler in (logic.on_start, logic.on_groups):
         for chat_type in ("group", "supergroup"):
             upd, ctx, sent = _fake_update(chat_type)
@@ -555,3 +555,11 @@ def test_ptb_command_handler_matches_plain_and_addressed_forms_only_for_this_bot
     assert h.check_update(update_for("/grupy")) is not None
     assert h.check_update(update_for("/grupy@hsowyzapraszacz_bot")) is not None
     assert h.check_update(update_for("/grupy@INNY_bot")) is None  # komenda do innego bota: nie nasza sprawa
+
+
+def test_commands_in_unlisted_group_are_ignored_silently():
+    logic = TelegramLogic(None, State(), [-1, -2], settings_url=SETTINGS)  # czat testowy -5 nie jest w TELEGRAM_GROUPS
+    for handler in (logic.on_start, logic.on_groups):
+        upd, ctx, sent = _fake_update("supergroup")
+        run(handler(upd, ctx))
+        assert sent == []  # zero odpowiedzi: bot dodany do losowej grupy nie zdradza, do czego służy

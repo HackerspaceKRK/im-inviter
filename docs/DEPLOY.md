@@ -115,13 +115,15 @@ Bot może zapraszać do **przestrzeni** zamiast (albo obok) pojedynczych pokoi: 
    wygeneruje, nie blokuje reszty — user dostaje jej nazwę na liście „Nie udało się wygenerować linku do: …".
 5. **`/grupy`** (w prywatnej rozmowie z botem, tylko dla połączonych userów): świeże linki do wszystkich grup. Dzięki
    temu dodanie grupy później nie wymaga niczego od admina, a wygasły/zużyty link da się odnowić.
-6. **Komendy na grupie:** `/start` i `/grupy` (także w formie `/grupy@nazwabota`) wysłane na grupie nie są ignorowane: bot odpowiada
+6. **Komendy na grupie:** `/start` i `/grupy` (także w formie `/grupy@nazwabota`) wysłane na grupie z `TELEGRAM_GROUPS` bot odpowiada
    krótką instrukcją, że komendy działają tylko w prywatnej rozmowie, co robi `/start` (łączy konto z Authentikiem) i co
    robi `/grupy` (świeże linki). W DM-ach, gdzie user ma coś wpisać (brak dopasowania przy `/start`, niepołączone konto
    przy `/grupy`), bot dokleja adres ustawień: `AUTHENTIK_URL` + `/if/user/#/settings`. Telegram w grupach z włączonym
    „privacy mode" dostarcza botowi tylko komendy zaadresowane wprost (`/grupy@nazwabota`) albo wysłane zaraz po jego
    wiadomości, więc zwykłe `/grupy` bywa w ogóle niewidoczne dla bota — to ograniczenie Telegrama (admin grupy tego nie omija
    bez wyłączenia privacy mode w BotFatherze: `/setprivacy`).
+   **Na grupach spoza `TELEGRAM_GROUPS` bot milczy** (nie odpowiada instrukcją), więc dodanie go do losowej grupy
+   niczego nie zdradza ani nie robi hałasu. (Nie wychodzi z niej sam; w razie potrzeby wyrzuć go ręcznie.)
 
 ## 5. Wdrożenie na hoście
 

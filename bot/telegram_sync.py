@@ -184,7 +184,14 @@ class TelegramLogic:
         await update.message.reply_text(text, reply_markup=markup)
 
     async def _reply_in_group(self, update: Any, context: Any, cmd: str) -> None:
-        """Komenda na grupie (także /komenda@nazwabota): zamiast milczeć, wyjaśnij, że trzeba pisać na priv."""
+        """Komenda na grupie (także /komenda@nazwabota): wyjaśnij, że trzeba pisać na priv.
+
+        Tylko na grupach z TELEGRAM_GROUPS. Na grupie, do której ktoś losowo dodał bota, milczymy
+        (żadnej instrukcji, żadnego śladu poza logiem), żeby nie zdradzać, do czego służy.
+        """
+        if update.effective_chat.id not in self.groups:
+            log.debug("%s na obcej grupie %s: ignoruję", cmd, update.effective_chat.id)
+            return
         log.info("%s na czacie %s (%s) od tg id=%s: odsyłam instrukcję", cmd, update.effective_chat.id,
                  update.effective_chat.type, getattr(update.effective_user, "id", None))
         await update.message.reply_text(self.group_help(getattr(context.bot, "username", None)))
