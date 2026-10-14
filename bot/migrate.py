@@ -53,14 +53,20 @@ def plan_migration(attrs: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str], Li
     notes: List[str] = []
 
     if "matrix_handles" in attrs:
-        merged, _invalid = normalize_matrix_handles([attrs.get("matrixHandles"), attrs.get("matrix_handles")])
+        merged, invalid = normalize_matrix_handles([attrs.get("matrixHandles"), attrs.get("matrix_handles")])
         if merged:
             set_["matrixHandles"] = merged
         remove.append("matrix_handles")
-        notes.append(f"matrix_handles → matrixHandles ({len(merged)} kont po scaleniu)")
+        dropped = f"; odrzucono niepoprawne wpisy: {', '.join(invalid)}" if invalid else ""
+        notes.append(f"matrix_handles → matrixHandles ({len(merged)} kont po scaleniu{dropped})")
 
     if "telegram_username" in attrs:
-        if _is_empty(attrs.get("telegramUsername")) and not _is_empty(attrs["telegram_username"]):
+        already_linked = any(not _is_empty(attrs.get(k)) for k in ID_LEGACY)
+        if already_linked and not _is_empty(attrs["telegram_username"]):
+            # Stary bot zostawiał spełniony wniosek w atrybucie. Konto jest już połączone, więc nie przenosimy go
+            # jako „oczekującego" (inaczej usermanager pokazywałby „waiting for /start" w nieskończoność).
+            notes.append("telegram_username: usunięto (wniosek spełniony, konto już połączone)")
+        elif _is_empty(attrs.get("telegramUsername")) and not _is_empty(attrs["telegram_username"]):
             set_["telegramUsername"] = attrs["telegram_username"]
             notes.append("telegram_username → telegramUsername")
         else:

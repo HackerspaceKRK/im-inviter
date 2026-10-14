@@ -727,7 +727,7 @@ def test_migration_merges_handles_renames_and_drops_derived():
     }
     out = _apply(attrs)
     assert out["matrixHandles"] == ["@b:x.y", "@c:x.y", "@a:x.y"]        # nowe pierwsze, bez duplikatów
-    assert out["telegramUsername"] == "@jan_kowalski"
+    assert "telegramUsername" not in out                                   # konto już połączone (telegram_id): wniosek spełniony
     assert out["telegramIDs"] == "288245411, 111111111, 567621890, 7"          # format (tekst) zostaje, stare znaczniki dopisane
     assert "telegramVerifiedId" not in out and "telegram_id" not in out
     assert out["mifareCardId"] == ["x"]                                   # cudzego nie ruszamy
@@ -898,3 +898,21 @@ def test_append_tg_id_preserves_format_and_handles_edge_cases():
     assert append_tg_id(5, 5) == ["5"] and append_tg_id(5, 6) == ["5", "6"]
     original = ["1"]
     assert append_tg_id(original, 2) is not original and original == ["1"]  # nie mutujemy wejścia
+
+
+def test_pending_username_request_is_migrated_unless_account_was_already_linked():
+    set_, remove, _ = plan_migration({"telegram_username": "@czeka_na_start"})
+    assert set_ == {"telegramUsername": "@czeka_na_start"} and remove == ["telegram_username"]
+    set_, remove, notes = plan_migration({"telegram_username": "@polaczony", "telegram_id": 5})
+    assert "telegramUsername" not in set_ and "telegram_username" in remove
+    assert any("wniosek spełniony" in n for n in notes)
+    set_, _, _ = plan_migration({"telegram_username": "@x", "telegram_id": ""})   # pusty znacznik nie liczy się jako połączone
+    assert set_ == {"telegramUsername": "@x"}
+
+
+def test_migration_reports_which_invalid_matrix_handles_were_dropped():
+    _, _, notes = plan_migration({"matrix_handles": "@dobry:x.y zly literowka"})
+    text = " ".join(notes)
+    assert "1 kont" in text and "odrzucono niepoprawne wpisy: zly, literowka" in text
+    _, _, notes = plan_migration({"matrix_handles": ""})
+    assert "0 kont po scaleniu)" in " ".join(notes)                         # pusta wartość: bez wzmianki o odrzuconych
