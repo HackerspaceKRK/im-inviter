@@ -14,6 +14,8 @@ from typing import Optional
 
 CODE_TTL_SECONDS = 15 * 60
 MAX_CODES_PER_ACCOUNT = 5
+# Odstępy między próbami nieudanego zaproszenia (s): 5 min, 15 min, 1 h, 6 h, 24 h (i tak już co 24 h).
+INVITE_BACKOFF = (300, 900, 3600, 21600, 86400)
 _ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # bez 0/O/1/I
 
 
@@ -33,6 +35,9 @@ class State:
             CREATE TABLE IF NOT EXISTS invited(
                 handle TEXT, room TEXT, ts INTEGER, PRIMARY KEY(handle, room));
             CREATE TABLE IF NOT EXISTS reported(key TEXT PRIMARY KEY, ts INTEGER);
+            CREATE TABLE IF NOT EXISTS failures(
+                handle TEXT, room TEXT, attempts INTEGER, next_retry REAL, last_error TEXT,
+                PRIMARY KEY(handle, room));
             CREATE TABLE IF NOT EXISTS tgcodes(
                 hash TEXT PRIMARY KEY, tg_id INTEGER, expires INTEGER);
             """
@@ -50,6 +55,29 @@ class State:
         )
         self.db.commit()
 
+    # --- nieudane zaproszenia: odstęp rośnie, żeby nie młócić homeservera (limit zaproszeń → 429) ---
+    def failure(self, handle: str, room: str):
+        """(próby, kolejna próba (unix), ostatni błąd) albo None."""
+        return self.db.execute(
+            "SELECT attempts, next_retry, last_error FROM failures WHERE handle=? AND room=?", (handle, room)
+        ).fetchone()
+
+    def record_failure(self, handle: str, room: str, error: str, min_delay: float = 0,
+                       now: Optional[float] = None) -> float:
+        """Zapisuje porażkę; zwraca czas kolejnej próby. min_delay = np. retry_after z 429."""
+        now = time.time() if now is None else now
+        prev = self.failure(handle, room)
+        attempts = (prev[0] if prev else 0) + 1
+        delay = max(INVITE_BACKOFF[min(attempts - 1, len(INVITE_BACKOFF) - 1)], min_delay)
+        self.db.execute("INSERT OR REPLACE INTO failures VALUES(?,?,?,?,?)",
+                        (handle, room, attempts, now + delay, error))
+        self.db.commit()
+        return now + delay
+
+    def clear_failure(self, handle: str, room: str) -> None:
+        self.db.execute("DELETE FROM failures WHERE handle=? AND room=?", (handle, room))
+        self.db.commit()
+
     def invited_at(self, handle: str, room: str) -> Optional[int]:
         """Kiedy bot zaprosił tę parę (unix ts) albo None, gdy nie zapraszał (np. zaprosił ktoś inny)."""
         r = self.db.execute("SELECT ts FROM invited WHERE handle=? AND room=?", (handle, room)).fetchone()
@@ -65,6 +93,7 @@ class State:
         gone = sorted(known - set(current_handles))
         for h in gone:
             self.db.execute("DELETE FROM invited WHERE handle=?", (h,))
+            self.db.execute("DELETE FROM failures WHERE handle=?", (h,))
             for prefix in (f"ban:{h}:", f"err:{h}:", f"left:{h}:", f"pending:{h}:"):
                 self.db.execute("DELETE FROM reported WHERE substr(key,1,?)=?", (len(prefix), prefix))
         if gone:

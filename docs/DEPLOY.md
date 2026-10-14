@@ -168,6 +168,28 @@ z SQLite, osobna nazwa projektu compose wynika z nazwy katalogu).
 - Ręcznie, bez ruszania Authentika: zaproś konto z Elementa albo skasuj parę z bazy
   (`delete from invited where handle=? and room=?` w `state.db`).
 
+## Nieudane zaproszenia, limity (429) i niedostępne serwery
+
+- **Odstęp po porażce:** nieudane zaproszenie bot ponawia z rosnącym odstępem 5 min → 15 min → 1 h → 6 h → 24 h
+  (potem co 24 h), zamiast co minutę. Moment kolejnej próby jest w `matrix_status` („… (następna próba 10:15 UTC)"),
+  a po sukcesie status wraca do `ok`. Odstęp resetuje się, gdy usuniesz handle z Authentika i dopiszesz go z powrotem.
+- **`429 Too Many Requests`:** bot respektuje `retry_after_ms` z odpowiedzi i **przestaje wysyłać zaproszenia do końca
+  przebiegu** (kolejne dostaną swoją kolej w następnych). Wiadomość „Dodano…" jest osobno: jej porażka (np. limit wiadomości)
+  nie cofa udanego zaproszenia i nie powoduje ponownego zaproszenia.
+- **Błąd serwera (np. `502`)** przy zaproszeniu konta z nieosiągalnego serwera (`@x:matrix.krg`, literówka w domenie,
+  serwer wewnętrzny): bot pomija pozostałe pokoje dla tego handle'a w danym przebiegu i wpada w odstęp. Taki handle
+  warto po prostu poprawić lub usunąć w Authentiku.
+- **Limit zaproszeń Synapse'a jest domyślnie bardzo ostry** (`rc_invites`: pojedynczy nadawca dostaje krótki zryw, potem
+  jedno zaproszenie na kilka minut, i wlicza się do niego także nieudane). Przy większej liczbie handle'i × pokoi bot będzie
+  więc zapraszał partiami. Na własnym homeserverze możesz limit podnieść w `homeserver.yaml`:
+  ```yaml
+  rc_invites:
+    per_room: {per_second: 1, burst_count: 20}
+    per_user: {per_second: 0.5, burst_count: 50}
+  ```
+  (restart Synapse'a; to dotyczy wszystkich userów serwera, więc dobierz wartości do skali). Alternatywa: administracyjny
+  „override ratelimit" dla konta bota — czy obejmuje limit zaproszeń, zależy od wersji Synapse'a, sprawdź w dokumentacji.
+
 ## Utrzymanie
 
 | Co | Komenda |

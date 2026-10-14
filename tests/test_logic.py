@@ -83,17 +83,23 @@ class FakeMatrix:
         self.members = membership or {}  # (room, mxid) -> membership
         self.fail = set(fail)
         self.invites, self.notices, self.htmls = [], [], []
+        self.attempts, self.errors, self.notice_error = [], {}, None
 
     async def membership(self, room, mxid):
         return self.members.get((room, mxid))
 
     async def invite(self, room, mxid):
+        self.attempts.append((room, mxid))
+        if mxid in self.errors:
+            raise self.errors[mxid]
         if mxid in self.fail:
             raise RuntimeError("403 nie ma takiego usera")
         self.invites.append((room, mxid))
         self.members[(room, mxid)] = "invite"
 
     async def notice(self, room, text, html=None):
+        if self.notice_error:
+            raise self.notice_error
         self.notices.append((room, text))
         self.htmls.append(html)
 
@@ -416,3 +422,69 @@ def test_message_type_is_configurable_and_defaults_to_m_text():
     run(mk(msgtype="m.notice").notice("!r:x.y", "cicho"))
     assert sent[0]["msgtype"] == "m.text" and sent[0]["format"] == "org.matrix.custom.html"
     assert sent[1]["msgtype"] == "m.notice"
+
+
+def _http_error(status, body=None, headers=None):
+    import httpx
+    req = httpx.Request("POST", "https://hs.test/invite")
+    return httpx.HTTPStatusError("e", request=req, response=httpx.Response(status, json=body or {}, headers=headers, request=req))
+
+
+def test_failed_invite_backs_off_then_retries_and_clears_failure_on_success():
+    import time
+    st = State()
+    az, mx = FakeAuthentik([matrix_user("@a:x.y")]), FakeMatrix()
+    mx.errors["@a:x.y"] = _http_error(502)
+    run(run_matrix_cycle(az, mx, st, ["!r"]))
+    assert len(mx.attempts) == 1 and "502" in az.users[0]["attributes"]["matrix_status"]
+    assert "następna próba" in az.users[0]["attributes"]["matrix_status"]
+    run(run_matrix_cycle(az, mx, st, ["!r"]))   # zaraz potem: odstęp trwa, brak kolejnego żądania
+    assert len(mx.attempts) == 1
+    st.db.execute("UPDATE failures SET next_retry=?", (time.time() - 1,)); st.db.commit()
+    del mx.errors["@a:x.y"]                      # serwer wrócił
+    run(run_matrix_cycle(az, mx, st, ["!r"]))
+    assert len(mx.attempts) == 2 and mx.invites == [("!r", "@a:x.y")]
+    assert st.failure("@a:x.y", "!r") is None and az.users[0]["attributes"]["matrix_status"] == "ok"
+
+
+def test_backoff_grows_and_is_capped():
+    st = State()
+    delays = []
+    for i in range(7):
+        nxt = st.record_failure("@a:x.y", "!r", "e", now=1000)
+        delays.append(int(nxt - 1000))
+    assert delays == [300, 900, 3600, 21600, 86400, 86400, 86400]
+
+
+def test_429_halts_remaining_invites_in_cycle_and_respects_retry_after():
+    import time
+    st = State()
+    az = FakeAuthentik([matrix_user("@a:x.y\n@b:x.y")])
+    mx = FakeMatrix()
+    mx.errors["@a:x.y"] = _http_error(429, {"errcode": "M_LIMIT_EXCEEDED", "retry_after_ms": 600000})
+    run(run_matrix_cycle(az, mx, st, ["!r"]))
+    assert mx.attempts == [("!r", "@a:x.y")]      # b nawet nie próbowany w tym przebiegu
+    assert st.failure("@a:x.y", "!r")[1] - time.time() >= 590  # retry_after 10 min > bazowy 5 min
+    del mx.errors["@a:x.y"]
+    st.db.execute("UPDATE failures SET next_retry=0"); st.db.commit()
+    run(run_matrix_cycle(az, mx, st, ["!r"]))     # po upływie odstępu: oba dostają zaproszenie
+    assert sorted(h for _, h in mx.invites) == ["@a:x.y", "@b:x.y"]
+
+
+def test_server_error_skips_remaining_rooms_for_that_handle():
+    az, mx = FakeAuthentik([matrix_user("@a:x.y")]), FakeMatrix()
+    mx.errors["@a:x.y"] = _http_error(502)
+    run(run_matrix_cycle(az, mx, State(), ["!r", "!r2", "!r3"]))
+    assert len(mx.attempts) == 1                   # 1 żądanie zamiast 3
+
+
+def test_notice_failure_does_not_undo_or_retry_the_invite():
+    st = State()
+    az, mx = FakeAuthentik([matrix_user("@a:x.y")]), FakeMatrix()
+    mx.notice_error = _http_error(429, {"retry_after_ms": 1000})
+    run(run_matrix_cycle(az, mx, st, ["!r"]))
+    assert mx.invites == [("!r", "@a:x.y")] and st.was_invited("@a:x.y", "!r")
+    assert az.users[0]["attributes"]["matrix_status"] == "ok"
+    mx.notice_error = None
+    run(run_matrix_cycle(az, mx, st, ["!r"]))
+    assert len(mx.invites) == 1                    # nie zapraszamy drugi raz tylko dlatego, że wiadomość padła

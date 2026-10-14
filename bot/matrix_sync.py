@@ -81,6 +81,33 @@ def user_link(mxid: str) -> str:
     return f'<a href="https://matrix.to/#/{quote(mxid, safe="@:")}">{html_escape(mxid)}</a>'
 
 
+def _retry_after(e: Exception) -> float:
+    """Sekundy z odpowiedzi 429 (retry_after_ms z Synapse'a albo nagłówek Retry-After); 0 gdy to nie 429."""
+    if not (isinstance(e, httpx.HTTPStatusError) and e.response.status_code == 429):
+        return 0.0
+    try:
+        ms = e.response.json().get("retry_after_ms")
+        if ms:
+            return float(ms) / 1000
+    except Exception:
+        pass
+    try:
+        return float(e.response.headers.get("Retry-After", 60))
+    except ValueError:
+        return 60.0
+
+
+def _server_error(e: Exception) -> bool:
+    """Błąd po stronie serwera/połączenia (np. 502 przy zdalnym serwerze handle'a, timeout)."""
+    return isinstance(e, httpx.RequestError) or (
+        isinstance(e, httpx.HTTPStatusError) and e.response.status_code >= 500
+    )
+
+
+def _hhmm(ts: float) -> str:
+    return time.strftime("%H:%M", time.gmtime(ts)) + " UTC"
+
+
 def _err(e: Exception) -> str:
     if isinstance(e, httpx.HTTPStatusError):
         try:
@@ -90,7 +117,7 @@ def _err(e: Exception) -> str:
         if e.response.status_code == 403 and "not in room" in err:
             return "bot nie jest w tym pokoju albo nie ma w nim uprawnień (dodaj go i nadaj power level ≥ invite)"
         return f"{e.response.status_code} {err}".strip()
-    return str(e)
+    return f"{type(e).__name__}: {e}" if str(e) == "" else str(e)
 
 
 async def run_matrix_cycle(
@@ -110,6 +137,7 @@ async def run_matrix_cycle(
     targets = [(r, False) for r in rooms] + [(s, True) for s in spaces if s not in rooms]
     space_names: Dict[str, str] = {}
     current: set = set()  # wszystkie handle'e wpisane teraz w Authentiku (do zapominania usuniętych)
+    halt_invites_until = 0.0  # po 429: do tego momentu nie wysyłamy już zaproszeń (reszta w kolejnych przebiegach)
 
     async def label(room: str) -> str:
         """Nazwa pokoju/przestrzeni do komunikatów (cache na przebieg); fallback: ID."""
@@ -137,6 +165,8 @@ async def run_matrix_cycle(
                     action = invite_action(
                         await matrix.membership(room, handle), state.was_invited(handle, room)
                     )
+                    if action != "invite":
+                        state.clear_failure(handle, room)  # np. ktoś zaprosił ręcznie / już jest w pokoju
                     if action == "banned":
                         msgs.append(f"{handle} ma bana w {await label(room)}")
                         if state.report_once(f"ban:{handle}:{room}"):
@@ -160,23 +190,50 @@ async def run_matrix_cycle(
                         if dry_run:
                             log.info("[dry-run] zaprosiłbym %s do %s (user %s)", handle, room, username)
                             continue
-                        await matrix.invite(room, handle)
+                        fail = state.failure(handle, room)
+                        if fail and fail[1] > time.time():  # odstęp po poprzedniej porażce jeszcze trwa
+                            msgs.append(f"{handle} → {await label(room)}: {fail[2]} (następna próba {_hhmm(fail[1])})")
+                            continue
+                        if time.time() < halt_invites_until:  # limit zaproszeń (429): reszta w następnych przebiegach
+                            continue
+                        try:
+                            await matrix.invite(room, handle)
+                        except Exception as e:
+                            err = _err(e)
+                            retry_after = _retry_after(e)
+                            nxt = state.record_failure(handle, room, err, min_delay=retry_after)
+                            if retry_after:
+                                halt_invites_until = time.time() + retry_after
+                            stats["errors"] += 1
+                            msgs.append(f"{handle} → {await label(room)}: {err} (następna próba {_hhmm(nxt)})")
+                            if state.report_once(f"err:{handle}:{room}:{err}"):
+                                log.error("invite %s → %s: %s (następna próba %s)", handle, room, err, _hhmm(nxt))
+                            if _server_error(e):
+                                break  # serwer handle'a nieosiągalny: nie próbuj pozostałych pokoi w tym przebiegu
+                            continue
+                        state.clear_failure(handle, room)
                         state.mark_invited(handle, room)
                         stats["invited"] += 1
                         log.info("zaproszono %s do %s (user %s)", handle, room, username)
-                        if not is_space:
-                            await matrix.notice(
-                                room, f"Dodano {handle} na prośbę {username}",
-                                f"Dodano {user_link(handle)} na prośbę {html_escape(username)}",
-                            )
-                        elif notify_room:
-                            sp = await label(room)
-                            await matrix.notice(
-                                notify_room,
-                                f"Dodano {handle} do przestrzeni {sp} na prośbę {username}",
-                                f"Dodano {user_link(handle)} do przestrzeni {html_escape(sp)} "
-                                f"na prośbę {html_escape(username)}",
-                            )
+                        # Wiadomość „Dodano…" jest dodatkiem: jej porażka (np. limit wiadomości) nie psuje
+                        # udanego zaproszenia ani nie jest ponawiana jako zaproszenie.
+                        try:
+                            if not is_space:
+                                await matrix.notice(
+                                    room, f"Dodano {handle} na prośbę {username}",
+                                    f"Dodano {user_link(handle)} na prośbę {html_escape(username)}",
+                                )
+                            elif notify_room:
+                                sp = await label(room)
+                                await matrix.notice(
+                                    notify_room,
+                                    f"Dodano {handle} do przestrzeni {sp} na prośbę {username}",
+                                    f"Dodano {user_link(handle)} do przestrzeni {html_escape(sp)} "
+                                    f"na prośbę {html_escape(username)}",
+                                )
+                        except Exception as e:
+                            log.warning("zaproszono %s do %s, ale wiadomość „Dodano” się nie wysłała: %s",
+                                        handle, room, _err(e))
                 except Exception as e:  # jeden zły handle/pokój nie wywala reszty
                     stats["errors"] += 1
                     msgs.append(f"{handle} → {room}: {_err(e)}")
