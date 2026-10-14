@@ -1,4 +1,5 @@
 import asyncio
+import pytest
 
 from bot.handles import (
     pending_age_label,
@@ -1179,3 +1180,9 @@ def test_account_that_messages_the_bot_is_marked_reachable_and_stale_attribute_i
     az = FakeAuthentik([tg_user(2, telegramReachableIDs=["1"])])                  # user bez kont, ale ze starym atrybutem
     run(TelegramLogic(az, State(), [], ReachBot()).refresh_reachability())
     assert "telegramReachableIDs" not in az.users[0]["attributes"]
+
+
+@pytest.fixture(autouse=True)
+def _no_probe_gap(monkeypatch):
+    import bot.telegram_sync as ts
+    monkeypatch.setattr(ts, "REACH_PROBE_GAP_S", 0)

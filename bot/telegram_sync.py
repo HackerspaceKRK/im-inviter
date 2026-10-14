@@ -17,6 +17,7 @@ grupy po id — to ograniczenie API Telegrama).
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Any, List, Optional, Tuple
@@ -41,7 +42,8 @@ def parse_tg_requests(value) -> List[dict]:
 
 
 REACH_RETRY_S = 6 * 3600  # jak często sprawdzamy ponownie konto, które było nieosiągalne
-REACH_PROBES_PER_CYCLE = 25  # ile kont sprawdzamy w jednym przebiegu (rozkładamy pierwsze skanowanie na kilka minut)
+REACH_PROBES_PER_CYCLE = 10  # ile kont sprawdzamy w jednym przebiegu (rozkładamy pierwsze skanowanie na dłużej)
+REACH_PROBE_GAP_S = 1.0  # przerwa między zapytaniami, żeby nie wyglądać jak skaner
 
 
 def _is_unreachable(e: Exception) -> bool:
@@ -297,6 +299,8 @@ class TelegramLogic:
                     log.warning("sprawdzenie osiągalności tg id=%s nie powiodło się: %s", tg_id, e)
                     break
             probed += 1
+            if REACH_PROBE_GAP_S:
+                await asyncio.sleep(REACH_PROBE_GAP_S)
         for u in users:
             attrs = u.get("attributes") or {}
             owned = sorted(i for i in user_tg_ids(attrs) if i.isdigit())
