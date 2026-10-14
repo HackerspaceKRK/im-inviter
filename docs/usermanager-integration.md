@@ -47,8 +47,8 @@ zapisać stare klucze). Jest idempotentna: user w nowym formacie nie jest zapisy
 
 | Stary klucz | Co robi bot |
 |---|---|
-| `matrix_handles` | **scala** z `matrixHandles` (nowe pierwsze, bez duplikatów, znormalizowane), stary usuwa |
-| `telegram_username` | → `telegramUsername` (gdy nowy pusty), stary usuwa |
+| `matrix_handles` | **scala** z `matrixHandles` (nowe pierwsze, bez duplikatów, znormalizowane), stary usuwa; niepoprawne wpisy są odrzucane, a log migracji wymienia je z nazwy |
+| `telegram_username` | → `telegramUsername` (gdy nowy pusty), stary usuwa. **Wyjątek:** gdy user ma też stare `telegram_id` (konto już połączone), wniosek był spełniony i **nie jest przenoszony** (inaczej wisiałby jako oczekujący) |
 | `telegram_id`, `telegramVerifiedId` | **dopisuje** do `telegramIDs` w formacie istniejącej wartości (jeśli ID jeszcze nie ma; reszty nie zmienia), klucz usuwa |
 | `matrix_status`, `matrix_accounts`, `matrix_invite_*`, `telegram_code`, `telegram_status` | **usuwa** (pochodne/jednorazowe, bot policzy od nowa) |
 | puste `matrixHandles` / `telegramUsername` / `telegramCode` (`""`, `[]`) | usuwa (flow ustawień zapisuje puste stringi dla nietkniętych pól) |
