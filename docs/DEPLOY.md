@@ -204,6 +204,14 @@ co `/grupy`) i zapisuje wynik w `telegramInviteResults`. Warunki: ID musi być n
 `error: to konto Telegram nie należy do tego usera`), a konto musi kiedyś napisać do bota `/start` (Telegram nie pozwala botowi
 pisać pierwszemu; wtedy wynik to czytelny błąd, a prośba nie wisi w kolejce).
 
+## Które konta Telegrama bot może zagadnąć
+
+Telegram nie pozwala botowi napisać do kogoś, kto nigdy do niego nie napisał. Bot ustala to **cicho** przez `getChat` (działa tylko
+dla kont, które już z botem rozmawiały; nic nie jest do nich wysyłane) i publikuje wynik w `telegramReachableIDs`; konto, które
+napisze do bota (`/start`, `/grupy`, przycisk), oznacza się samo. `usermanager` blokuje wtedy przycisk Invite przy kontach spoza
+tej listy. Pierwsze skanowanie jest rozłożone (25 kont na przebieg); nieosiągalne konta są sprawdzane ponownie co 6 h. Atrybut jest
+publikowany dla usera dopiero, gdy znany jest status wszystkich jego kont.
+
 ## Spójność z Authentikiem (nadpisane atrybuty)
 
 Źródłem prawdy jest Authentik, a SQLite (`state.db`) to tylko pamięć bota. Znany problem: narzędzie, które zapisuje usera

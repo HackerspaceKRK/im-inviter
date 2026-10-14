@@ -28,6 +28,7 @@ Kontrakt danych i plan zmian. Źródłem prawdy jest Authentik (atrybuty usera);
 | `matrixAccounts` | `{handle: {state, detail, updated}}` | bot | stan **każdego** konta (poniżej) |
 | `matrixInviteRequests` | `[{handle, by, ts}]` | **usermanager** | prośby o ręczny invite; bot przetwarza i czyści |
 | `imInviterNote` | `string` | bot | komentarz bota o wykrytej niespójności (np. nadpisane atrybuty); bot go nie kasuje, admin może |
+| `telegramReachableIDs` | `string[]` | bot | które z `telegramIDs` bot może zagadnąć w DM (konto napisało kiedyś do bota). Brak atrybutu = jeszcze nie wiadomo (UI nie blokuje); lista bez ID = to konto nieosiągalne |
 | `telegramInviteRequests` | `[{id, by, ts}]` | **usermanager** | prośby o ręczne wysłanie linków do grup na dane konto Telegram; bot przetwarza i czyści |
 | `telegramInviteResults` | `[{id, by, ts, result, groups}]` (ostatnie 5) | bot | wynik ręcznych wysyłek (`ok: wysłano N linków…` albo `error: …`) |
 | `matrixInviteResults` | `[{handle, by, ts, result, rooms}]` (ostatnie 5) | bot | wynik ręcznych zaproszeń |
