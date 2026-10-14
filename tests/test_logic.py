@@ -1005,3 +1005,72 @@ def test_already_linked_without_own_request_or_with_request_of_another_user_stay
     logic = TelegramLogic(az, State(), [], settings_url=SETTINGS)
     text, pk = run(logic.start_reply(99, "jan_kowalski"))               # wniosek złożył INNY user: nie przejmujemy cudzego ID
     assert pk is None and "już połączone" in text and "telegramIDs" in text and SETTINGS in text
+
+
+# ---------- ręczne wysłanie linków do grup Telegrama (kolejka z usermanagera) ----------
+class DmForbiddenBot(FakeTgBot):
+    async def send_message(self, tg_id, text):
+        raise RuntimeError("Forbidden: bot can't initiate conversation with a user")
+
+
+def _tg_req(id_, by="admin1", ts=1):
+    return {"id": id_, "by": by, "ts": ts}
+
+
+def test_manual_telegram_invite_sends_group_links_and_records_result():
+    bot = FakeTgBot({-1: "Główna", -2: "Offtop"})
+    user = tg_user(1, telegramIDs=["99"], telegramInviteRequests=[_tg_req("99", "kasia")])
+    az = FakeAuthentik([user])
+    assert run(TelegramLogic(az, State(), [-1, -2], bot).poll_invites()) == 1
+    assert len(bot.sent) == 1 and bot.sent[0][0] == 99 and "Główna" in bot.sent[0][1]   # DM z linkami na to konto
+    attrs = az.users[0]["attributes"]
+    assert "telegramInviteRequests" not in attrs                                          # kolejka oczyszczona
+    res = attrs["telegramInviteResults"][0]
+    assert res["id"] == "99" and res["by"] == "kasia" and res["result"].startswith("ok") and res["groups"] == 2
+
+
+def test_manual_telegram_invite_for_id_not_owned_by_user_is_rejected_without_dm():
+    bot = FakeTgBot({-1: "Główna"})
+    user = tg_user(1, telegramIDs=["99"], telegramInviteRequests=[_tg_req("555")])
+    az = FakeAuthentik([user, tg_user(2, telegramIDs=["555"])])
+    run(TelegramLogic(az, State(), [-1], bot).poll_invites())
+    assert bot.sent == []                                                                  # cudzego konta nie nagabujemy
+    assert az.users[0]["attributes"]["telegramInviteResults"][0]["result"] == "error: to konto Telegram nie należy do tego usera"
+
+
+def test_manual_telegram_invite_to_account_that_never_started_the_bot_is_a_readable_error():
+    bot = DmForbiddenBot({-1: "Główna"})
+    user = tg_user(1, telegramIDs=["99"], telegramInviteRequests=[_tg_req("99")])
+    az = FakeAuthentik([user])
+    run(TelegramLogic(az, State(), [-1], bot).poll_invites())
+    attrs = az.users[0]["attributes"]
+    assert "telegramInviteRequests" not in attrs                                          # nie wisi w kolejce w nieskończoność
+    assert "nie może napisać do tego konta" in attrs["telegramInviteResults"][0]["result"]
+
+
+def test_manual_telegram_invite_without_groups_or_bot_does_nothing_harmful():
+    az = FakeAuthentik([tg_user(1, telegramIDs=["99"], telegramInviteRequests=[_tg_req("99")])])
+    assert run(TelegramLogic(az, State(), [], FakeTgBot()).poll_invites()) == 1
+    assert az.users[0]["attributes"]["telegramInviteResults"][0]["result"] == "error: brak skonfigurowanych grup"
+    assert run(TelegramLogic(FakeAuthentik([tg_user(1)]), State(), [-1], None).poll_invites()) == 0   # bez bota: nic
+
+
+def test_telegram_request_added_during_processing_is_not_lost_and_text_form_ids_are_owned():
+    bot = FakeTgBot({-1: "Główna"})
+    user = tg_user(1, telegramIDs="99, 100", telegramInviteRequests=[_tg_req("100", ts=1)])    # lista ID jako tekst
+    az = FakeAuthentik([user])
+    new_req = _tg_req("99", "admin2", ts=2)
+    az.before_write = lambda attrs: attrs["telegramInviteRequests"].append(new_req)           # równoległy zapis admina
+    run(TelegramLogic(az, State(), [-1], bot).poll_invites())
+    assert bot.sent[0][0] == 100                                                               # ID z tekstu "99, 100" rozpoznane
+    assert az.users[0]["attributes"]["telegramInviteRequests"] == [new_req]
+
+
+def test_manual_telegram_results_are_capped_to_last_five():
+    bot = FakeTgBot({-1: "Główna"})
+    old = [{"id": "99", "by": "x", "ts": i, "result": "ok", "groups": 1} for i in range(5)]
+    user = tg_user(1, telegramIDs=["99"], telegramInviteResults=old, telegramInviteRequests=[_tg_req("99", ts=99)])
+    az = FakeAuthentik([user])
+    run(TelegramLogic(az, State(), [-1], bot).poll_invites())
+    res = az.users[0]["attributes"]["telegramInviteResults"]
+    assert len(res) == 5 and res[-1]["by"] == "admin1" and res[0]["ts"] == 1

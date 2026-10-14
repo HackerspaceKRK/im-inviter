@@ -196,6 +196,14 @@ Kolejność wdrożenia na instancji z istniejącymi danymi:
 4. **Sprawdź** `docker compose logs --tail=50 bot`: `migracja: userów N, zmieniono M` i brak ostrzeżeń o nieznanych atrybutach
    (albo ich lista do ręcznego przejrzenia).
 
+## Ręczne wysłanie linków do grup Telegrama
+
+Strona Invitations w `usermanager` ma przy każdym koncie Telegrama przycisk, który dopisuje prośbę do `telegramInviteRequests`.
+Bot przy najbliższym przebiegu (≤ `POLL_INTERVAL`) wysyła na to konto **DM ze świeżymi, jednorazowymi linkami do grup** (to samo
+co `/grupy`) i zapisuje wynik w `telegramInviteResults`. Warunki: ID musi być na liście `telegramIDs` TEGO usera (inaczej wynik
+`error: to konto Telegram nie należy do tego usera`), a konto musi kiedyś napisać do bota `/start` (Telegram nie pozwala botowi
+pisać pierwszemu; wtedy wynik to czytelny błąd, a prośba nie wisi w kolejce).
+
 ## Spójność z Authentikiem (nadpisane atrybuty)
 
 Źródłem prawdy jest Authentik, a SQLite (`state.db`) to tylko pamięć bota. Znany problem: narzędzie, które zapisuje usera

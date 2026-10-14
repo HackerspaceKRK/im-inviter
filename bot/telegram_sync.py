@@ -26,6 +26,32 @@ from .handles import append_tg_id, find_pending_tg_users, normalize_tg_ids, norm
 log = logging.getLogger("telegram")
 
 
+MAX_TG_RESULTS = 5  # ile ostatnich wyników ręcznych wysyłek zostaje w telegramInviteResults
+
+
+def parse_tg_requests(value) -> List[dict]:
+    """`telegramInviteRequests`: lista {id, by, ts}. Wpisy niepoprawnego kształtu są pomijane."""
+    out: List[dict] = []
+    if not isinstance(value, list):
+        return out
+    for item in value:
+        if isinstance(item, dict) and str(item.get("id") or "").strip():
+            out.append({"id": str(item["id"]).strip(), "by": str(item.get("by") or "admin"), "ts": item.get("ts")})
+    return out
+
+
+def _tg_req_key(req: dict) -> tuple:
+    return (req["id"], req["by"], req["ts"])
+
+
+def _tg_err(e: Exception) -> str:
+    text = str(e)
+    low = text.lower()
+    if "can't initiate" in low or "chat not found" in low or "forbidden" in low or "blocked" in low:
+        return ("bot nie może napisać do tego konta (nie napisało jeszcze do bota /start albo go zablokowało)")
+    return f"{type(e).__name__}: {text}" if text else type(e).__name__
+
+
 def user_tg_ids(attrs: dict) -> set:
     """Wszystkie ID Telegrama przypisane userowi (z `telegramIDs`, w dowolnej formie zapisu)."""
     return set(normalize_tg_ids(attrs.get("telegramIDs")))
@@ -183,6 +209,55 @@ class TelegramLogic:
         if not self.groups:
             return False, "Nie ma skonfigurowanych grup."
         return True, ""
+
+    async def poll_invites(self) -> int:
+        """Ręczne wysłanie linków do grup: prośby `telegramInviteRequests` (zapisuje je usermanager).
+
+        Bot wysyła na wskazane konto DM ze świeżymi, jednorazowymi linkami (to samo co /grupy), ale tylko dla ID, które jest
+        na liście `telegramIDs` TEGO usera. Wynik trafia do `telegramInviteResults`. Bot nie może pierwszy napisać do konta,
+        które nigdy nie wysłało mu /start — wtedy wynik to czytelny błąd. Zwraca liczbę przetworzonych próśb."""
+        if not self.bot:
+            return 0
+        processed = 0
+        for u in await self.authentik.list_users():
+            attrs = u.get("attributes") or {}
+            requests = parse_tg_requests(attrs.get("telegramInviteRequests"))
+            if not requests:
+                continue
+            owned = user_tg_ids(attrs)
+            entries, done = [], set()
+            for req in requests:
+                n = 0
+                if req["id"] not in owned:
+                    result = "error: to konto Telegram nie należy do tego usera"
+                elif not self.groups:
+                    result = "error: brak skonfigurowanych grup"
+                else:
+                    try:
+                        n = await self.send_group_links(int(req["id"]))
+                        result = (f"ok: wysłano {n} linków do grup" if n else
+                                  "error: nie udało się wygenerować żadnego linku (bot nie jest adminem grup?)")
+                    except Exception as e:
+                        result = "error: " + _tg_err(e)
+                log.info("ręczne linki do grup dla tg id=%s (user %s, przez %s): %s", req["id"], u["username"], req["by"], result)
+                entries.append({"id": req["id"], "by": req["by"], "ts": int(time.time()), "result": result, "groups": n})
+                done.add(_tg_req_key(req))
+                processed += 1
+            prev = attrs.get("telegramInviteResults")
+            prev = prev if isinstance(prev, list) else []
+
+            def drop(fresh: dict, done: set = done) -> None:
+                """Na ŚWIEŻYCH atrybutach: nie gubimy próśb dopisanych przez admina w trakcie przebiegu."""
+                left = [r for r in parse_tg_requests(fresh.get("telegramInviteRequests")) if _tg_req_key(r) not in done]
+                if left:
+                    fresh["telegramInviteRequests"] = left
+                else:
+                    fresh.pop("telegramInviteRequests", None)
+
+            await self.authentik.update_attributes(
+                u["pk"], {"telegramInviteResults": (prev + entries)[-MAX_TG_RESULTS:]}, mutate=drop
+            )
+        return processed
 
     async def poll_codes(self) -> int:
         """Ścieżka B: userzy, którzy wkleili kod w Authentiku. Zwraca liczbę połączonych."""

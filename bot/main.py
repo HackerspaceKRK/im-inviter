@@ -76,6 +76,7 @@ async def amain(dry_run: bool, once: bool, audit: bool = False) -> None:
                         authentik, matrix, state, rooms, dry_run, spaces, notify_room, pending_after))
                 if tg_logic:
                     await tg_logic.poll_codes()
+                    await tg_logic.poll_invites()
             except Exception:
                 log.exception("przebieg nie powiódł się, próbuję ponownie za %ss", interval)
             if once:

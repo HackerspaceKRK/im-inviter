@@ -35,6 +35,7 @@ DROP_WHEN_EMPTY = ("matrixHandles", "telegramUsername", "telegramCode")
 # Klucze, które znamy (bot, usermanager, Authentik) — reszta w inwentarzu to „nieznane".
 KNOWN_KEYS = {
     "matrixHandles", "matrixStatus", "matrixAccounts", "matrixInviteRequests", "matrixInviteResults", "imInviterNote",
+    "telegramInviteRequests", "telegramInviteResults",
     "telegramUsername", "telegramCode", "telegramStatus", "telegramIDs",
     "mifareCardId", "bankAccountNumber", "membershipExpirationTimestamp", "foundUsBy", "settings",
 }
