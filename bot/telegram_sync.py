@@ -24,12 +24,27 @@ log = logging.getLogger("telegram")
 
 
 class TelegramLogic:
-    def __init__(self, authentik: Any, state: Any, groups: List[int], bot: Any = None):
+    def __init__(self, authentik: Any, state: Any, groups: List[int], bot: Any = None,
+                 settings_url: str = ""):
         self.authentik = authentik
         self.state = state
         self.groups = groups
         self.bot = bot  # telegram.Bot, ustawiany po zbudowaniu Application
+        self.settings_url = settings_url  # np. https://auth.example.com/if/user/#/settings
 
+    def _settings_line(self, prefix: str = "Ustawienia w Authentiku: ") -> str:
+        return f"\n{prefix}{self.settings_url}" if self.settings_url else ""
+
+    def group_help(self, bot_username: Optional[str] = None) -> str:
+        """Odpowiedź na komendę wysłaną na grupie: komendy działają tylko w prywatnej rozmowie z botem."""
+        me = f"@{bot_username}" if bot_username else "mnie"
+        return (
+            f"Moje komendy działają tylko w prywatnej rozmowie. Napisz do {me} na priv:\n"
+            "• /start — łączy Twoje konto Telegram z kontem w Authentiku (najpierw wpisz swój @username "
+            "w ustawieniach Authentika), a potem wysyła Ci jednorazowe linki do grup.\n"
+            "• /grupy — wysyła świeże, jednorazowe linki do grup (tylko dla kont już połączonych przez /start)."
+            + self._settings_line()
+        )
     # --- czysta decyzja dla /start (testowalna bez Telegrama) ---
     async def start_reply(self, tg_id: int, tg_username: Optional[str]) -> Tuple[str, Optional[int]]:
         """Zwraca (tekst, pk usera do potwierdzenia albo None)."""
@@ -53,7 +68,7 @@ class TelegramLogic:
             "Nie widzę oczekującego wniosku dla tego konta.\n"
             "Opcja 1: wpisz swój @username w Authentiku i wyślij mi /start jeszcze raz.\n"
             f"Opcja 2 (gdy nie masz username): wklej w Authentiku w polu „Kod z Telegrama” kod "
-            f"{code} (ważny 15 minut).",
+            f"{code} (ważny 15 minut)." + self._settings_line(),
             None,
         )
 
@@ -110,7 +125,8 @@ class TelegramLogic:
         """/grupy: (czy wysłać linki, tekst gdy nie). Tylko dla połączonych userów."""
         users = await self.authentik.list_users()
         if not any(str((u.get("attributes") or {}).get("telegram_id")) == str(tg_id) for u in users):
-            return False, "To konto Telegram nie jest jeszcze połączone z Authentikiem. Wyślij /start."
+            return False, ("To konto Telegram nie jest jeszcze połączone z Authentikiem. Wpisz swój @username "
+                           "w ustawieniach Authentika, a potem wyślij mi /start." + self._settings_line())
         if not self.groups:
             return False, "Nie ma skonfigurowanych grup."
         return True, ""
@@ -153,6 +169,7 @@ class TelegramLogic:
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
         if update.effective_chat.type != "private":
+            await self._reply_in_group(update, context, "/start")
             return
         u = update.effective_user
         text, pk = await self.start_reply(u.id, u.username)
@@ -166,8 +183,15 @@ class TelegramLogic:
             )
         await update.message.reply_text(text, reply_markup=markup)
 
+    async def _reply_in_group(self, update: Any, context: Any, cmd: str) -> None:
+        """Komenda na grupie (także /komenda@nazwabota): zamiast milczeć, wyjaśnij, że trzeba pisać na priv."""
+        log.info("%s na czacie %s (%s) od tg id=%s: odsyłam instrukcję", cmd, update.effective_chat.id,
+                 update.effective_chat.type, getattr(update.effective_user, "id", None))
+        await update.message.reply_text(self.group_help(getattr(context.bot, "username", None)))
+
     async def on_groups(self, update: Any, context: Any) -> None:
         if update.effective_chat.type != "private":
+            await self._reply_in_group(update, context, "/grupy")
             return
         u = update.effective_user
         send, text = await self.groups_reply(u.id)

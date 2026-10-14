@@ -40,7 +40,8 @@ async def amain(dry_run: bool, once: bool) -> None:
         from telegram.ext import Application, CallbackQueryHandler, CommandHandler
 
         groups = [int(g) for g in _csv("TELEGRAM_GROUPS")]
-        tg_logic = TelegramLogic(authentik, state, groups)
+        settings_url = os.environ["AUTHENTIK_URL"].rstrip("/") + "/if/user/#/settings"
+        tg_logic = TelegramLogic(authentik, state, groups, settings_url=settings_url)
         tg_app = Application.builder().token(os.environ["TELEGRAM_TOKEN"]).build()
         tg_logic.bot = tg_app.bot
         tg_app.add_handler(CommandHandler("start", tg_logic.on_start))

@@ -488,3 +488,70 @@ def test_notice_failure_does_not_undo_or_retry_the_invite():
     mx.notice_error = None
     run(run_matrix_cycle(az, mx, st, ["!r"]))
     assert len(mx.invites) == 1                    # nie zapraszamy drugi raz tylko dlatego, że wiadomość padła
+
+
+SETTINGS = "https://auth.sq9.wtf/if/user/#/settings"
+
+
+def test_group_help_explains_start_and_grupy_dm_only_and_has_settings_link():
+    text = TelegramLogic(None, State(), [], settings_url=SETTINGS).group_help("hsowyzapraszacz_bot")
+    assert "@hsowyzapraszacz_bot" in text and "prywatnej" in text
+    assert "/start" in text and "/grupy" in text and SETTINGS in text
+    assert SETTINGS not in TelegramLogic(None, State(), []).group_help()  # bez adresu: bez linku, bez błędu
+
+
+def test_dm_replies_include_settings_link_when_user_must_enter_data():
+    az = FakeAuthentik([tg_user(1)])
+    logic = TelegramLogic(az, State(), [-1], settings_url=SETTINGS)
+    text, pk = run(logic.start_reply(99, None))
+    assert pk is None and SETTINGS in text
+    ok, text = run(logic.groups_reply(12345))
+    assert not ok and SETTINGS in text and "/start" in text
+    # połączony user nie dostaje zbędnego linku
+    az2 = FakeAuthentik([tg_user(1, telegram_id=99)])
+    assert SETTINGS not in run(TelegramLogic(az2, State(), [], settings_url=SETTINGS).start_reply(99, "x"))[0]
+
+
+def _fake_update(chat_type):
+    from types import SimpleNamespace
+    sent = []
+
+    async def reply_text(text, **kw):
+        sent.append(text)
+    upd = SimpleNamespace(effective_chat=SimpleNamespace(type=chat_type, id=-5),
+                          effective_user=SimpleNamespace(id=7, username="jan_kowalski"),
+                          message=SimpleNamespace(reply_text=reply_text))
+    return upd, SimpleNamespace(bot=SimpleNamespace(username="hsowyzapraszacz_bot")), sent
+
+
+def test_commands_in_group_get_instructions_not_silence():
+    logic = TelegramLogic(None, State(), [-1], settings_url=SETTINGS)
+    for handler in (logic.on_start, logic.on_groups):
+        for chat_type in ("group", "supergroup"):
+            upd, ctx, sent = _fake_update(chat_type)
+            run(handler(upd, ctx))
+            assert len(sent) == 1 and "prywatnej" in sent[0] and "@hsowyzapraszacz_bot" in sent[0]
+
+
+def test_ptb_command_handler_matches_plain_and_addressed_forms_only_for_this_bot():
+    from datetime import datetime
+    from telegram import Bot, Chat, Message, MessageEntity, Update, User
+    from telegram.ext import CommandHandler
+
+    bot = Bot("123:abc")
+    bot._bot_user = User(id=1, first_name="inviter", is_bot=True, username="hsowyzapraszacz_bot")
+
+    async def noop(update, context):
+        pass
+
+    h = CommandHandler("grupy", noop)
+
+    def update_for(text):
+        msg = Message(message_id=1, date=datetime.now(), chat=Chat(id=-5, type="supergroup"), text=text,
+                      entities=[MessageEntity(MessageEntity.BOT_COMMAND, 0, len(text.split()[0]))])
+        msg.set_bot(bot)
+        return Update(update_id=1, message=msg)
+
+    assert h.check_update(update_for("/grupy")) is not None
+    assert h.check_update(update_for("/grupy@hsowyzapraszacz_bot")) is not None
+    assert h.check_update(update_for("/grupy@INNY_bot")) is None  # komenda do innego bota: nie nasza sprawa
