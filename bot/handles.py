@@ -4,7 +4,9 @@ from __future__ import annotations
 import re
 from typing import Any, List, Optional, Tuple
 
-MXID_RE = re.compile(r"^@[a-z0-9._=/+\-]+:[a-z0-9.\-]+(?::\d{1,5})?$")
+# Nazwa użytkownika w Matrixie ROZRÓŻNIA wielkość liter (@Jan:x i @jan:x to dwa różne konta; historycznie istnieją konta
+# z wielkimi literami), więc część przed „:" zostaje dokładnie taka, jak wpisano. Domena (nazwa DNS) jej nie rozróżnia.
+MXID_RE = re.compile(r"^@[A-Za-z0-9._=/+\-]+:[A-Za-z0-9.\-]+(?::\d{1,5})?$")
 TG_USERNAME_RE = re.compile(r"^[a-z0-9_]{5,32}$")
 
 
@@ -20,14 +22,21 @@ def _tokens(value: Any) -> List[str]:
     return [t for t in re.split(r"[\s,;]+", str(value)) if t]
 
 
+def normalize_mxid(tok: str) -> str:
+    """Dopisuje brakujące „@" i zmienia na małe litery TYLKO domenę; nazwa użytkownika zostaje bez zmian."""
+    h = tok if tok.startswith("@") else "@" + tok
+    local, sep, server = h.partition(":")
+    return f"{local}{sep}{server.lower()}" if sep else h
+
+
 def normalize_matrix_handles(value: Any) -> Tuple[List[str], List[str]]:
-    """Zwraca (poprawne bez duplikatów w kolejności wpisania, niepoprawne)."""
+    """Zwraca (poprawne bez duplikatów w kolejności wpisania, niepoprawne).
+
+    Duplikat to dokładnie ten sam handle (wielkość liter w nazwie użytkownika ma znaczenie)."""
     valid: List[str] = []
     invalid: List[str] = []
     for tok in _tokens(value):
-        h = tok.lower()
-        if not h.startswith("@"):
-            h = "@" + h
+        h = normalize_mxid(tok)
         if MXID_RE.match(h):
             if h not in valid:
                 valid.append(h)

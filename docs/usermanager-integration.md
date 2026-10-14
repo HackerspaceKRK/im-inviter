@@ -20,7 +20,7 @@ Kontrakt danych i plan zmian. Źródłem prawdy jest Authentik (atrybuty usera);
 
 | Atrybut | Typ | Pisze | Znaczenie |
 |---|---|---|---|
-| `matrixHandles` | `string[]` | user (flow), admin (usermanager) | konta Matrix usera (`@x:serwer`) |
+| `matrixHandles` | `string[]` | user (flow), admin (usermanager) | konta Matrix usera (`@x:serwer`); wielkość liter w nazwie użytkownika ma znaczenie (nie zmieniamy jej), domena małymi literami |
 | `telegramUsername` | `string` | user (flow) | wniosek o weryfikację, niezweryfikowany |
 | `telegramIDs` | lista tekstów **lub** tekst „1, 2" | admin (ręcznie) **i bot** (po weryfikacji) | numeryczne ID Telegrama, **wiele na usera**; bot tylko dopisuje (w istniejącym formacie), niczego nie usuwa |
 | `telegramStatus` | `string` | bot | `ok` / komunikat błędu |

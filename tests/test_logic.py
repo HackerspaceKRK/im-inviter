@@ -15,8 +15,8 @@ def run(coro):
 
 # ---------- handles ----------
 def test_normalize_matrix_handles_text_and_dupes():
-    valid, invalid = normalize_matrix_handles("@Jan:masmiks.wtf\nanna:masmiks.wtf, @jan:masmiks.wtf; zle")
-    assert valid == ["@jan:masmiks.wtf", "@anna:masmiks.wtf"]
+    valid, invalid = normalize_matrix_handles("@Jan:masmiks.wtf\nanna:masmiks.wtf, @Jan:masmiks.wtf; zle")
+    assert valid == ["@Jan:masmiks.wtf", "@anna:masmiks.wtf"]               # ten sam handle raz; brakujące @ dopisane
     assert invalid == ["zle"]
 
 
@@ -133,7 +133,7 @@ def test_cycle_normalizes_string_to_list_and_sets_status():
     az, mx = FakeAuthentik([matrix_user("@A:x.y zle")]), FakeMatrix()
     run(run_matrix_cycle(az, mx, State(), ["!r"]))
     attrs = az.users[0]["attributes"]
-    assert attrs["matrixHandles"] == ["@a:x.y"]
+    assert attrs["matrixHandles"] == ["@A:x.y"]                            # wielkość liter w nazwie zostaje
     assert "niepoprawny handle: zle" in attrs["matrixStatus"]
 
 
@@ -727,7 +727,7 @@ def test_migration_merges_handles_renames_and_drops_derived():
         "telegramIDs": "288245411, 111111111", "mifareCardId": ["x"],
     }
     out = _apply(attrs)
-    assert out["matrixHandles"] == ["@b:x.y", "@c:x.y", "@a:x.y"]        # nowe pierwsze, bez duplikatów
+    assert out["matrixHandles"] == ["@B:x.y", "@c:x.y", "@a:x.y", "@b:x.y"]   # nowe pierwsze; @B i @b to RÓŻNE konta
     assert "telegramUsername" not in out                                   # konto już połączone (telegram_id): wniosek spełniony
     assert out["telegramIDs"] == "288245411, 111111111, 567621890, 7"          # format (tekst) zostaje, stare znaczniki dopisane
     assert "telegramVerifiedId" not in out and "telegram_id" not in out
@@ -1074,3 +1074,30 @@ def test_manual_telegram_results_are_capped_to_last_five():
     run(TelegramLogic(az, State(), [-1], bot).poll_invites())
     res = az.users[0]["attributes"]["telegramInviteResults"]
     assert len(res) == 5 and res[-1]["by"] == "admin1" and res[0]["ts"] == 1
+
+
+# ---------- wielkość liter: Matrix rozróżnia nazwy użytkowników ----------
+def test_localpart_case_is_preserved_and_only_the_server_is_lowercased():
+    from bot.handles import normalize_matrix_handles
+    assert normalize_matrix_handles("@Jan:Masmiks.WTF")[0] == ["@Jan:masmiks.wtf"]
+    assert normalize_matrix_handles("@Jan:x.y @jan:x.y @JAN:x.y")[0] == ["@Jan:x.y", "@jan:x.y", "@JAN:x.y"]   # trzy różne konta
+    assert normalize_matrix_handles("Jan:x.y")[0] == ["@Jan:x.y"]                                          # brakujące @ dopisane
+    assert normalize_matrix_handles("@Jan:x.y:8448")[0] == ["@Jan:x.y:8448"]                                # port zostaje
+
+
+def test_cycle_calls_matrix_with_the_exact_case_and_keeps_differently_cased_accounts_apart():
+    az, mx = FakeAuthentik([matrix_user("@Jan:X.Y @jan:x.y")]), FakeMatrix()
+    run(run_matrix_cycle(az, mx, State(), ["!r"]))
+    assert mx.invites == [("!r", "@Jan:x.y"), ("!r", "@jan:x.y")]            # dwa osobne zaproszenia, dokładna pisownia
+    attrs = az.users[0]["attributes"]
+    assert attrs["matrixHandles"] == ["@Jan:x.y", "@jan:x.y"]
+    assert sorted(attrs["matrixAccounts"]) == ["@Jan:x.y", "@jan:x.y"]
+
+
+def test_manual_request_ownership_check_is_case_sensitive():
+    user = matrix_user("@Jan:x.y"); user["attributes"]["matrixInviteRequests"] = [_req("@jan:x.y")]
+    az, mx = FakeAuthentik([user]), FakeMatrix()
+    run(run_matrix_cycle(az, mx, State(), ["!r"]))
+    assert mx.attempts == [("!r", "@Jan:x.y")]                              # tylko zwykłe zaproszenie własnego konta
+    assert ("!r", "@jan:x.y") not in mx.attempts                             # cudzego konta (@jan) nie zapraszamy
+    assert az.users[0]["attributes"]["matrixInviteResults"][0]["result"] == "error: to konto nie należy do tego usera"

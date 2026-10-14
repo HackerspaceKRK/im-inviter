@@ -15,7 +15,7 @@ Projekt jest niezależny od k0 — `docker compose up` gdziekolwiek. Wdrożenie 
 
 | Atrybut | Pisze | Znaczenie |
 |---|---|---|
-| `matrixHandles` | user, potem bot normalizuje | **lista** `@x:serwer` (małe litery, bez duplikatów) |
+| `matrixHandles` | user, potem bot normalizuje | **lista** `@x:serwer`; Matrix **rozróżnia wielkość liter** w nazwie użytkownika (`@Jan` i `@jan` to dwa konta), więc bot jej nie zmienia, a na małe litery zamienia tylko domenę; bez duplikatów |
 | `matrixStatus` | bot | `ok` albo opis błędów (zły handle, ban, odmowa invite) |
 | `telegramUsername` | user | wniosek, jeszcze niezweryfikowany — **nie ufać** |
 | `telegramCode` | user | kod z bota, bot kasuje po użyciu |
