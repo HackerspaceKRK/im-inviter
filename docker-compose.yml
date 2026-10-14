@@ -1,6 +1,6 @@
 services:
   bot:
-    image: ghcr.io/hackerspacekrk/clanked-matrix-tg-authentik-inviter:latest
+    image: ghcr.io/hackerspacekrk/im-inviter:latest
     build: .
     restart: unless-stopped
     env_file: .env

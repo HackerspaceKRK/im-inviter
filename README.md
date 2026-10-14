@@ -67,7 +67,7 @@ docker compose run --rm bot python -m bot.main --dry-run --once
 ## Obraz Dockera
 
 GitHub Actions (`.github/workflows/docker.yml`) po każdym pushu na `main` uruchamia testy i buduje obraz
-`linux/amd64` + `linux/arm64`, publikowany w GHCR: `ghcr.io/hackerspacekrk/clanked-matrix-tg-authentik-inviter`
+`linux/amd64` + `linux/arm64`, publikowany w GHCR: `ghcr.io/hackerspacekrk/im-inviter`
 (tagi: `latest`, `main`, `sha-<commit>`, a po tagu `vX.Y.Z` także `X.Y.Z` i `X.Y`). Pull requesty tylko budują obraz.
 Wdrożenie z gotowego obrazu: `docker compose pull && docker compose up -d` (`docker-compose.yml` ma `image:` z fallbackiem
 `build: .`). Jeśli pierwszy `pull` zwróci „denied", pakiet jest prywatny — ustaw widoczność w Packages → Package settings.
