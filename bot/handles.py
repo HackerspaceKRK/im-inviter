@@ -74,16 +74,25 @@ def pending_age_label(age_seconds: float) -> str:
     return "ponad dobę" if hours >= 24 else f"ponad {max(hours, 1)} h"
 
 
+def normalize_tg_ids(*values: Any) -> List[str]:
+    """ID Telegrama z dowolnej formy zapisu → lista tekstów (kolejność zachowana, bez duplikatów i pustych).
+
+    Przyjmuje tablicę, napis „288245411, 111111111" (przecinki/spacje/średniki) albo liczby; `usermanager`
+    zapisuje `telegramIDs` jako tablicę tekstów, ale starsze dane i ręczne edycje bywają inne.
+    """
+    out: List[str] = []
+    for v in values:
+        for tok in _tokens(v):
+            if tok not in out:
+                out.append(tok)
+    return out
+
+
 def find_pending_tg_users(users: List[dict], tg_username: str) -> List[dict]:
-    """Userzy Authentika, którzy wpisali ten @username i nie mają jeszcze telegramVerifiedId."""
+    """Userzy Authentika, którzy wpisali ten @username jako wniosek o połączenie.
+
+    Czy to konto jest już połączone, rozstrzyga wcześniej `find_linked_user` (po ID na liście `telegramIDs`)."""
     want = normalize_tg_username(tg_username)
     if not want:
         return []
-    out = []
-    for u in users:
-        attrs = u.get("attributes") or {}
-        if attrs.get("telegramVerifiedId"):
-            continue
-        if normalize_tg_username(attrs.get("telegramUsername")) == want:
-            out.append(u)
-    return out
+    return [u for u in users if normalize_tg_username((u.get("attributes") or {}).get("telegramUsername")) == want]

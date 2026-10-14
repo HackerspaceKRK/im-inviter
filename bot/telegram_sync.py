@@ -1,4 +1,7 @@
-"""Telegram: weryfikacja konta i zapis `telegramVerifiedId` do atrybutów usera w Authentiku.
+"""Telegram: weryfikacja konta i dopisanie jego ID do listy `telegramIDs` usera w Authentiku.
+
+Źródłem prawdy o kontach Telegrama jest wyłącznie `telegramIDs` (tablica tekstów; `usermanager` pozwala na wiele
+kont na usera, bot też). Bot tylko dopisuje zweryfikowane ID; wpisów admina nie usuwa ani nie zmienia.
 
 Dwie ścieżki (Authentik nie umie pokazać usera tokenu wygenerowanego przez bota, więc
 kierunek jest: bot → user → Authentik):
@@ -18,21 +21,18 @@ import logging
 import time
 from typing import Any, List, Optional, Tuple
 
-from .handles import find_pending_tg_users
+from .handles import find_pending_tg_users, normalize_tg_ids, normalize_tg_username
 
 log = logging.getLogger("telegram")
 
 
 def user_tg_ids(attrs: dict) -> set:
-    """Wszystkie ID Telegrama przypisane userowi: ręczne `telegramIDs` (admin, usermanager) + zweryfikowane."""
-    ids = {str(x) for x in (attrs.get("telegramIDs") or []) if x not in (None, "")}
-    if attrs.get("telegramVerifiedId"):
-        ids.add(str(attrs["telegramVerifiedId"]))
-    return ids
+    """Wszystkie ID Telegrama przypisane userowi (z `telegramIDs`, w dowolnej formie zapisu)."""
+    return set(normalize_tg_ids(attrs.get("telegramIDs")))
 
 
 def find_linked_user(users: List[dict], tg_id: int, exclude_pk: Optional[int] = None) -> Optional[dict]:
-    """User Authentika, któremu przypisano to ID Telegrama (zweryfikowane albo wpisane przez admina)."""
+    """User Authentika, któremu przypisano to ID Telegrama (przez bota albo ręcznie przez admina)."""
     for u in users:
         if exclude_pk is not None and u["pk"] == exclude_pk:
             continue
@@ -44,10 +44,17 @@ def find_linked_user(users: List[dict], tg_id: int, exclude_pk: Optional[int] = 
 def add_tg_id(attrs: dict, tg_id: int) -> None:
     """Dopisuje ID do `telegramIDs` (stringi, bez duplikatów); istniejących wpisów nie ruszamy ani nie usuwamy.
     Działa na ŚWIEŻYCH atrybutach (mutate w update_attributes), więc nie gubi równoległych zmian admina."""
-    ids = [str(x) for x in (attrs.get("telegramIDs") or [])]
+    ids = normalize_tg_ids(attrs.get("telegramIDs"))
     if str(tg_id) not in ids:
         ids.append(str(tg_id))
     attrs["telegramIDs"] = ids
+
+
+def clear_matching_username(attrs: dict, tg_username: Optional[str]) -> None:
+    """Wniosek `telegramUsername` został spełniony (konto o tym username się połączyło) — nie zostawiamy go jako oczekującego."""
+    want = normalize_tg_username(tg_username)
+    if want and normalize_tg_username(attrs.get("telegramUsername")) == want:
+        attrs.pop("telegramUsername", None)
 
 
 class TelegramLogic:
@@ -99,8 +106,11 @@ class TelegramLogic:
             None,
         )
 
-    async def link(self, pk: int, tg_id: int, users: Optional[List[dict]] = None) -> Tuple[bool, str]:
-        """Zapisuje telegramVerifiedId (jeśli to id nie należy już do kogoś innego) i czyści kod."""
+    async def link(self, pk: int, tg_id: int, users: Optional[List[dict]] = None,
+                   tg_username: Optional[str] = None) -> Tuple[bool, str]:
+        """Dopisuje ID do `telegramIDs` usera (jeśli to ID nie należy już do kogoś innego) i czyści kod.
+
+        User może mieć wiele kont Telegrama: kolejne dopisują się do listy. Jedno ID może należeć tylko do jednego usera."""
         users = users if users is not None else await self.authentik.list_users()
         if find_linked_user(users, tg_id, exclude_pk=pk):
             await self.authentik.update_attributes(
@@ -108,9 +118,13 @@ class TelegramLogic:
                 remove=["telegramCode"],
             )
             return False, "To konto Telegram jest już połączone z innym użytkownikiem."
+
+        def apply(fresh: dict) -> None:
+            add_tg_id(fresh, tg_id)
+            clear_matching_username(fresh, tg_username)
+
         await self.authentik.update_attributes(
-            pk, {"telegramVerifiedId": int(tg_id), "telegramStatus": "ok"}, remove=["telegramCode"],
-            mutate=lambda fresh: add_tg_id(fresh, tg_id),  # zweryfikowane ID trafia też do listy `telegramIDs`
+            pk, {"telegramStatus": "ok"}, remove=["telegramCode"], mutate=apply,
         )
         log.info("połączono authentik pk=%s z telegram id=%s", pk, tg_id)
         return True, "Połączone ✅"
@@ -162,24 +176,10 @@ class TelegramLogic:
         """Ścieżka B: userzy, którzy wkleili kod w Authentiku. Zwraca liczbę połączonych."""
         users = await self.authentik.list_users()
         linked = 0
-        # Uzupełnienie: zweryfikowane ID, którego nie ma jeszcze w `telegramIDs` (np. połączone starszą wersją bota).
-        for u in users:
-            attrs = u.get("attributes") or {}
-            vid = attrs.get("telegramVerifiedId")
-            if vid and str(vid) not in {str(x) for x in (attrs.get("telegramIDs") or [])}:
-                await self.authentik.update_attributes(u["pk"], mutate=lambda fresh, v=vid: add_tg_id(fresh, v))
         for u in users:
             attrs = u.get("attributes") or {}
             code = attrs.get("telegramCode")
             if not code:
-                continue
-            if attrs.get("telegramVerifiedId"):
-                # Jedno konto Telegram na usera. Bez tego komunikatu kod leżałby w polu bez śladu.
-                await self.authentik.update_attributes(
-                    u["pk"],
-                    {"telegramStatus": "to konto Authentik ma już połączony Telegram — poproś admina o odłączenie, potem wklej kod ponownie"},
-                    remove=["telegramCode"],
-                )
                 continue
             tg_id = self.state.consume_tg_code(str(code))
             log.info("kod od usera %s (authentik pk=%s): %s", u["username"], u["pk"],
@@ -189,7 +189,14 @@ class TelegramLogic:
                     u["pk"], {"telegramStatus": "zły lub wygasły kod"}, remove=["telegramCode"]
                 )
                 continue
-            ok, msg = await self.link(u["pk"], tg_id, users)
+            # Kod nie niesie username; spróbuj go poznać, żeby domknąć ewentualny wniosek `telegramUsername`.
+            tg_username = None
+            if self.bot:
+                try:
+                    tg_username = (await self.bot.get_chat(tg_id)).username
+                except Exception:
+                    pass
+            ok, msg = await self.link(u["pk"], tg_id, users, tg_username)
             if ok:
                 linked += 1
                 if self.bot:
@@ -256,7 +263,7 @@ class TelegramLogic:
         if not pending:
             await q.edit_message_text("Ten wniosek już nie istnieje albo nie pasuje do Twojego konta.")
             return
-        ok, msg = await self.link(pk, u.id, users)
+        ok, msg = await self.link(pk, u.id, users, u.username)
         await q.edit_message_text(msg)
         if ok:
             await self.send_group_links(u.id)

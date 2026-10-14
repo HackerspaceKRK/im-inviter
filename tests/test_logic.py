@@ -42,10 +42,11 @@ def test_invite_action():
     assert invite_action(None, True) == "skip"
 
 
-def test_find_pending_tg_users_skips_linked():
+def test_find_pending_tg_users_matches_normalized_username_only():
     users = [
         {"pk": 1, "attributes": {"telegramUsername": "@Jan_Kowalski"}},
-        {"pk": 2, "attributes": {"telegramUsername": "@jan_kowalski", "telegramVerifiedId": 5}},
+        {"pk": 2, "attributes": {"telegramUsername": "@ktos_inny"}},
+        {"pk": 3, "attributes": {}},
     ]
     assert [u["pk"] for u in find_pending_tg_users(users, "jan_kowalski")] == [1]
 
@@ -176,7 +177,7 @@ def test_start_without_request_gives_code_that_works_in_poll():
     az.users[0]["attributes"]["telegramCode"] = code
     assert run(logic.poll_codes()) == 1
     attrs = az.users[0]["attributes"]
-    assert attrs["telegramVerifiedId"] == 99 and attrs["telegramStatus"] == "ok"
+    assert attrs["telegramIDs"] == ["99"] and attrs["telegramStatus"] == "ok"
     assert "telegramCode" not in attrs
 
 
@@ -188,13 +189,13 @@ def test_bad_code_is_cleared_with_status():
 
 
 def test_link_refuses_id_owned_by_other_user():
-    az = FakeAuthentik([tg_user(1, telegramVerifiedId=99), tg_user(2)])
+    az = FakeAuthentik([tg_user(1, telegramIDs=["99"]), tg_user(2)])
     ok, _ = run(TelegramLogic(az, State(), []).link(2, 99))
-    assert not ok and "telegramVerifiedId" not in az.users[1]["attributes"]
+    assert not ok and "telegramIDs" not in az.users[1]["attributes"]
 
 
 def test_already_linked_start_reply():
-    az = FakeAuthentik([tg_user(1, telegramVerifiedId=99)])
+    az = FakeAuthentik([tg_user(1, telegramIDs=["99"])])
     text, pk = run(TelegramLogic(az, State(), []).start_reply(99, "x"))
     assert pk is None and "już połączone" in text
 
@@ -215,12 +216,16 @@ def test_space_without_notify_room_is_silent_and_room_still_gets_message():
     assert mx.notices == [("!r", "Dodano @a:x.y na prośbę jan")]
 
 
-def test_code_from_already_linked_user_gets_status_and_is_cleared():
-    az = FakeAuthentik([tg_user(1, telegramVerifiedId=99, telegramCode="ABCDEFGH")])
-    assert run(TelegramLogic(az, State(), []).poll_codes()) == 0
+def test_second_telegram_account_can_be_linked_to_same_user_by_code():
+    st = State()
+    az = FakeAuthentik([tg_user(1, telegramIDs=["99"])])
+    logic = TelegramLogic(az, st, [])
+    code = st.new_tg_code(100)
+    az.users[0]["attributes"]["telegramCode"] = code
+    assert run(logic.poll_codes()) == 1
     attrs = az.users[0]["attributes"]
-    assert attrs["telegramVerifiedId"] == 99  # nie ruszone
-    assert "telegramCode" not in attrs and "już połączony" in attrs["telegramStatus"]
+    assert attrs["telegramIDs"] == ["99", "100"]            # wiele kont na usera: dopisane, pierwsze nietknięte
+    assert "telegramCode" not in attrs and attrs["telegramStatus"] == "ok"
 
 
 def test_new_start_does_not_invalidate_previous_codes_but_is_capped():
@@ -278,7 +283,7 @@ def test_group_links_title_falls_back_to_id():
 
 
 def test_groups_command_only_for_linked_users():
-    az = FakeAuthentik([tg_user(1, telegramVerifiedId=99), tg_user(2)])
+    az = FakeAuthentik([tg_user(1, telegramIDs=["99"]), tg_user(2)])
     logic = TelegramLogic(az, State(), [-1])
     assert run(logic.groups_reply(99)) == (True, "")
     ok, text = run(logic.groups_reply(12345))
@@ -514,7 +519,7 @@ def test_dm_replies_include_settings_link_when_user_must_enter_data():
     ok, text = run(logic.groups_reply(12345))
     assert not ok and SETTINGS in text and "/start" in text
     # połączony user nie dostaje zbędnego linku
-    az2 = FakeAuthentik([tg_user(1, telegramVerifiedId=99)])
+    az2 = FakeAuthentik([tg_user(1, telegramIDs=["99"])])
     assert SETTINGS not in run(TelegramLogic(az2, State(), [], settings_url=SETTINGS).start_reply(99, "x"))[0]
 
 
@@ -717,20 +722,29 @@ def test_migration_merges_handles_renames_and_drops_derived():
     attrs = {
         "matrix_handles": ["@a:x.y", "@b:x.y"], "matrixHandles": "@B:x.y\n@c:x.y",
         "matrix_status": "ok", "matrix_accounts": {}, "telegram_code": "ABC", "telegram_status": "ok",
-        "telegram_username": "@jan_kowalski", "telegram_id": "567621890", "mifareCardId": ["x"],
+        "telegram_username": "@jan_kowalski", "telegram_id": "567621890", "telegramVerifiedId": 7,
+        "telegramIDs": "288245411, 111111111", "mifareCardId": ["x"],
     }
     out = _apply(attrs)
     assert out["matrixHandles"] == ["@b:x.y", "@c:x.y", "@a:x.y"]        # nowe pierwsze, bez duplikatów
-    assert out["telegramUsername"] == "@jan_kowalski" and out["telegramVerifiedId"] == 567621890
+    assert out["telegramUsername"] == "@jan_kowalski"
+    assert out["telegramIDs"] == ["288245411", "111111111", "567621890", "7"]   # napis → lista + stare znaczniki scalone
+    assert "telegramVerifiedId" not in out and "telegram_id" not in out
     assert out["mifareCardId"] == ["x"]                                   # cudzego nie ruszamy
     assert not [k for k in out if "_" in k]                               # zero starych kluczy snake_case
 
 
-def test_migration_is_idempotent_and_new_values_win_over_old():
-    attrs = {"telegram_username": "@stary_user", "telegramUsername": "@nowy_user", "telegram_id": 5, "telegramVerifiedId": 7}
+def test_migration_is_idempotent_and_new_username_wins_over_old():
+    attrs = {"telegram_username": "@stary_user", "telegramUsername": "@nowy_user", "telegramIDs": [288245411, "111111111"]}
     out = _apply(attrs)
-    assert out["telegramUsername"] == "@nowy_user" and out["telegramVerifiedId"] == 7
+    assert out["telegramUsername"] == "@nowy_user"
+    assert out["telegramIDs"] == ["288245411", "111111111"]               # liczby → teksty (jak zapisuje usermanager)
     assert plan_migration(out) == ({}, [], [])                            # drugi raz: nic do roboty
+
+
+def test_migration_leaves_correct_telegram_ids_untouched():
+    attrs = {"telegramIDs": ["288245411", "111111111"]}
+    assert plan_migration(attrs) == ({}, [], [])                          # poprawne dane: zero zmian, zero zapisów
 
 
 def test_migration_drops_empty_values_saved_by_settings_flow():
@@ -779,14 +793,20 @@ def test_real_client_include_inactive_and_mutate_applies_to_fresh_attributes():
 
 
 # ---------- Telegram: telegramIDs ----------
-def test_link_adds_verified_id_to_telegram_ids_without_touching_manual_entries():
-    az = FakeAuthentik([tg_user(1, telegramIDs=["111", 222])])
-    ok, _ = run(TelegramLogic(az, State(), []).link(1, 99))
+def test_link_adds_id_to_telegram_ids_without_touching_manual_entries_and_clears_matching_username():
+    az = FakeAuthentik([tg_user(1, telegramIDs=["111", 222], telegramUsername="@Jan_Kowalski")])
+    ok, _ = run(TelegramLogic(az, State(), []).link(1, 99, tg_username="jan_kowalski"))
     attrs = az.users[0]["attributes"]
-    assert ok and attrs["telegramVerifiedId"] == 99
-    assert attrs["telegramIDs"] == ["111", "222", "99"]                  # ręczne zostają (jako stringi), nowe dopisane
+    assert ok and attrs["telegramIDs"] == ["111", "222", "99"]           # ręczne zostają (jako teksty), nowe dopisane
+    assert "telegramUsername" not in attrs                                # wniosek spełniony: nie wisi jako oczekujący
     run(TelegramLogic(az, State(), []).link(1, 99))
     assert attrs["telegramIDs"].count("99") == 1                          # bez duplikatów
+
+
+def test_link_keeps_username_request_when_a_different_account_links():
+    az = FakeAuthentik([tg_user(1, telegramUsername="@inne_konto")])
+    run(TelegramLogic(az, State(), []).link(1, 99, tg_username="jan_kowalski"))
+    assert az.users[0]["attributes"]["telegramUsername"] == "@inne_konto"
 
 
 def test_link_refuses_id_registered_by_admin_for_another_user():
@@ -795,11 +815,17 @@ def test_link_refuses_id_registered_by_admin_for_another_user():
     assert not ok and "telegramVerifiedId" not in az.users[1]["attributes"] and "innym" in text
 
 
-def test_poll_backfills_verified_id_missing_from_telegram_ids():
-    az = FakeAuthentik([tg_user(1, telegramVerifiedId=99), tg_user(2, telegramVerifiedId=5, telegramIDs=["5"])])
-    run(TelegramLogic(az, State(), []).poll_codes())
-    assert az.users[0]["attributes"]["telegramIDs"] == ["99"]
-    assert [w[0] for w in az.writes] == [1]                               # user 2 już kompletny: zero zapisów
+def test_telegram_ids_are_read_in_any_stored_form():
+    from bot.handles import normalize_tg_ids
+    from bot.telegram_sync import add_tg_id, find_linked_user
+    assert normalize_tg_ids("288245411, 111111111") == ["288245411", "111111111"]
+    assert normalize_tg_ids(["1", 2], "2;3", None, "") == ["1", "2", "3"]
+    users = [tg_user(1, telegramIDs="288245411, 111111111"), tg_user(2, telegramIDs=[5])]
+    assert find_linked_user(users, 111111111)["pk"] == 1 and find_linked_user(users, 5)["pk"] == 2
+    assert find_linked_user(users, 999) is None
+    attrs = {"telegramIDs": "288245411, 111111111"}
+    add_tg_id(attrs, 7)
+    assert attrs["telegramIDs"] == ["288245411", "111111111", "7"]        # zapis zawsze jako lista tekstów
 
 
 def test_admin_registered_telegram_id_counts_as_linked_for_start_and_groups():

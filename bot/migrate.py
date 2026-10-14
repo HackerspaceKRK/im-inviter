@@ -11,7 +11,7 @@ import time
 from collections import Counter
 from typing import Any, Dict, List, Optional, Tuple
 
-from .handles import normalize_matrix_handles
+from .handles import normalize_matrix_handles, normalize_tg_ids
 
 log = logging.getLogger("migrate")
 
@@ -19,8 +19,10 @@ log = logging.getLogger("migrate")
 RENAMES = {
     "matrix_handles": "matrixHandles",
     "telegram_username": "telegramUsername",
-    "telegram_id": "telegramVerifiedId",
 }
+# Stare znaczniki „zweryfikowane ID": źródłem prawdy jest wyłącznie lista `telegramIDs` (wiele kont na usera),
+# więc ich wartość scalamy do `telegramIDs`, a klucz usuwamy.
+ID_LEGACY = ("telegram_id", "telegramVerifiedId")
 # Wartości pochodne albo jednorazowe: bot policzy je od nowa, więc zmiana nazwy nie ma sensu — usuwamy.
 DROP = (
     "matrix_status", "matrix_accounts", "matrix_invite_requests", "matrix_invite_results",
@@ -32,7 +34,7 @@ DROP_WHEN_EMPTY = ("matrixHandles", "telegramUsername", "telegramCode")
 # Klucze, które znamy (bot, usermanager, Authentik) — reszta w inwentarzu to „nieznane".
 KNOWN_KEYS = {
     "matrixHandles", "matrixStatus", "matrixAccounts", "matrixInviteRequests", "matrixInviteResults",
-    "telegramUsername", "telegramCode", "telegramStatus", "telegramVerifiedId", "telegramIDs",
+    "telegramUsername", "telegramCode", "telegramStatus", "telegramIDs",
     "mifareCardId", "bankAccountNumber", "membershipExpirationTimestamp", "foundUsBy", "settings",
 }
 _EMPTY = (None, "", [], {})
@@ -56,15 +58,25 @@ def plan_migration(attrs: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str], Li
         remove.append("matrix_handles")
         notes.append(f"matrix_handles → matrixHandles ({len(merged)} kont po scaleniu)")
 
-    for old, new in (("telegram_username", "telegramUsername"), ("telegram_id", "telegramVerifiedId")):
-        if old not in attrs:
-            continue
-        if _is_empty(attrs.get(new)) and not _is_empty(attrs[old]):
-            set_[new] = int(attrs[old]) if new == "telegramVerifiedId" and str(attrs[old]).isdigit() else attrs[old]
-            notes.append(f"{old} → {new}")
+    if "telegram_username" in attrs:
+        if _is_empty(attrs.get("telegramUsername")) and not _is_empty(attrs["telegram_username"]):
+            set_["telegramUsername"] = attrs["telegram_username"]
+            notes.append("telegram_username → telegramUsername")
         else:
-            notes.append(f"{old}: usunięto (nowy klucz {new} już ma wartość lub stary jest pusty)")
-        remove.append(old)
+            notes.append("telegram_username: usunięto (nowy klucz już ma wartość lub stary jest pusty)")
+        remove.append("telegram_username")
+
+    # telegramIDs: scal stare znaczniki i ujednolić zapis do listy tekstów (tablica, „1, 2" albo liczby → ["1","2"]).
+    legacy_present = [k for k in ID_LEGACY if k in attrs]
+    if legacy_present or "telegramIDs" in attrs:
+        merged = normalize_tg_ids(attrs.get("telegramIDs"), *(attrs.get(k) for k in legacy_present))
+        if merged != attrs.get("telegramIDs") and (merged or "telegramIDs" in attrs):
+            set_["telegramIDs"] = merged
+            notes.append("telegramIDs: " + ("scalone ze starymi kluczami i " if legacy_present else "")
+                         + f"ujednolicone do listy tekstów ({len(merged)} kont)")
+        for k in legacy_present:
+            remove.append(k)
+            notes.append(f"{k} → telegramIDs (klucz usunięty)")
 
     for key in DROP:
         if key in attrs:
@@ -104,7 +116,7 @@ async def run_migration(authentik: Any, dry_run: bool = False) -> Dict[str, Any]
 
         await authentik.update_attributes(user["pk"], mutate=apply)
 
-    handled = KNOWN_KEYS | set(RENAMES) | set(DROP)  # także stare klucze, które właśnie migrujemy
+    handled = KNOWN_KEYS | set(RENAMES) | set(DROP) | set(ID_LEGACY)  # także stare klucze, które właśnie migrujemy
     unknown = {k: n for k, n in inventory.items() if k not in handled and not k.startswith("goauthentik.io/")}
     log.info("migracja: userów %d, zmieniono %d", len(users), migrated)
     log.info("atrybuty w Authentiku (klucz×userów): %s",

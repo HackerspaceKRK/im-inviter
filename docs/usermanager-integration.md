@@ -5,12 +5,13 @@ Kontrakt danych i plan zmian. Źródłem prawdy jest Authentik (atrybuty usera);
 
 ## Decyzje (z rozmowy)
 
-1. **Telegram:** bot dopisuje zweryfikowane ID do istniejącej listy `telegramIDs` (inne narzędzia ją czytają);
-   `telegramVerifiedId` zostaje jako znacznik „zweryfikowane przez bota".
+1. **Telegram:** wyłącznie lista `telegramIDs` (inne narzędzia ją czytają). Bot dopisuje do niej ID po weryfikacji;
+   **nie ma osobnego znacznika „zweryfikowane"** ani limitu jednego konta na usera (usermanager też pozwala na wiele).
+   Lista bywa zapisana jako tablica albo napis „288245411, 111111111"; bot czyta oba i zawsze zapisuje tablicę tekstów.
 2. **Ręczny invite:** kolejka w atrybucie usera, wykonuje ją bot przy najbliższym przebiegu (≤ `POLL_INTERVAL`).
    `usermanager` nie dostaje żadnych sekretów Matrixa; uprawnienia pilnuje Authentik.
 3. **Nazwy:** camelCase, zgodnie z konwencją hackerspace'u (`telegramIDs`, `mifareCardId`, …). Pierwotnie planowano snake_case,
-   zmienione na życzenie. Stare klucze bot migruje sam (patrz „Migracja atrybutów"). `telegram_id` → `telegramVerifiedId`
+   zmienione na życzenie. Stare klucze bot migruje sam (patrz „Migracja atrybutów"). `telegram_id` jest scalane do `telegramIDs`
    (celowo inna nazwa niż lista `telegramIDs`, żeby ich nie mylić).
 
 ## Kontrakt atrybutów
@@ -19,8 +20,7 @@ Kontrakt danych i plan zmian. Źródłem prawdy jest Authentik (atrybuty usera);
 |---|---|---|---|
 | `matrixHandles` | `string[]` | user (flow), admin (usermanager) | konta Matrix usera (`@x:serwer`) |
 | `telegramUsername` | `string` | user (flow) | wniosek o weryfikację, niezweryfikowany |
-| `telegramIDs` | `string[]` | admin (ręcznie) **i bot** (zweryfikowane) | numeryczne ID Telegrama; bot tylko dopisuje, niczego nie usuwa |
-| `telegramVerifiedId` | `number` | bot | zweryfikowane ID; znacznik „verified" dla wpisu w `telegramIDs` |
+| `telegramIDs` | `string[]` | admin (ręcznie) **i bot** (po weryfikacji) | numeryczne ID Telegrama, **wiele na usera**; bot tylko dopisuje, niczego nie usuwa |
 | `telegramStatus` | `string` | bot | `ok` / komunikat błędu |
 | `matrixStatus` | `string` | bot | `ok` / komunikat błędów (tekst zbiorczy) |
 | `matrixAccounts` | `{handle: {state, detail, updated}}` | bot | stan **każdego** konta (poniżej) |
@@ -47,7 +47,7 @@ zapisać stare klucze). Jest idempotentna: user w nowym formacie nie jest zapisy
 |---|---|
 | `matrix_handles` | **scala** z `matrixHandles` (nowe pierwsze, bez duplikatów, znormalizowane), stary usuwa |
 | `telegram_username` | → `telegramUsername` (gdy nowy pusty), stary usuwa |
-| `telegram_id` | → `telegramVerifiedId` (liczba; nowa wartość ma pierwszeństwo), stary usuwa |
+| `telegram_id`, `telegramVerifiedId` | **scala** do `telegramIDs` (lista tekstów, bez duplikatów), klucz usuwa |
 | `matrix_status`, `matrix_accounts`, `matrix_invite_*`, `telegram_code`, `telegram_status` | **usuwa** (pochodne/jednorazowe, bot policzy od nowa) |
 | puste `matrixHandles` / `telegramUsername` / `telegramCode` (`""`, `[]`) | usuwa (flow ustawień zapisuje puste stringi dla nietkniętych pól) |
 
@@ -66,16 +66,16 @@ Podgląd bez zmian: `docker compose run --rm bot python -m bot.main --dry-run --
    „Dodano @x na prośbę <user> (ręcznie, przez <admin>)".
 2. **`matrixAccounts`** liczone co przebieg z wyników per para; zapis tylko gdy się zmieniło.
 3. **Telegram:** po weryfikacji (`/start` z przyciskiem albo kod) dopisz ID do `telegramIDs` (string, bez duplikatów,
-   cudzych wpisów nie ruszaj). Backfill: user z `telegramVerifiedId`, którego nie ma w `telegramIDs`, dostaje wpis przy
-   najbliższym przebiegu. Sprawdzenie „to ID należy już do innego usera" obejmuje także `telegramIDs` innych userów.
+   cudzych wpisów nie ruszaj); kolejne konta tego samego usera dopisują się do listy. Spełniony wniosek `telegramUsername`
+   znika. Sprawdzenie „to ID należy już do innego usera" dotyczy `telegramIDs` innych userów.
 4. Testy jednostkowe na fake'ach, jak dotąd.
 
 ## Zmiany w `usermanager`
 
 **Backend (Go):**
 - `summaryResponse` rozszerzone o statystyki integracji: `matrixLinked` (≥1 handle), `matrixHealthy` (`matrixStatus`=`ok`),
-  `matrixProblems`, `telegramLinked` (zweryfikowane `telegramVerifiedId`), `telegramInList` (niepuste `telegramIDs`),
-  `telegramPending` (`telegramUsername` bez `telegramVerifiedId`).
+  `matrixProblems`, `telegramLinked` (niepuste `telegramIDs`), `telegramAccounts` (suma kont Telegrama),
+  `telegramPending` (niepusty `telegramUsername`, czyli wniosek czeka na `/start`).
 - Nowy `GET /api/local/matrix-users`: userzy z niepustym `matrixHandles` (z cache; cache i tak się unieważnia po
   zmianie `last_updated`, a zapisy bota ją zmieniają). Czysta funkcja klasyfikacji + testy Go (w repo nie ma żadnych,
   dodajemy minimalne dla liczenia).
@@ -84,7 +84,7 @@ Podgląd bez zmian: `docker compose run --rm bot python -m bot.main --dry-run --
 - **Naprawa `EditUserPage`:** wczytane atrybuty są bazą, formularz nakłada się na nie; klucz usuwamy tylko wtedy, gdy
   user go świadomie wyczyścił. Bez tego żadna z poniższych funkcji nie przetrwa pierwszego zapisu usera.
 - **Edycja usera:** sekcja „Matrix" (lista handle'i jak `telegramIDs`, walidacja formatu, status + stan każdego konta)
-  i sekcja „Telegram" (`telegramIDs` z odznaką „verified" dla `telegramVerifiedId`, `telegramUsername` tylko do odczytu, status).
+  i sekcja „Telegram" (edytowalna lista `telegramIDs`, wiele kont, `telegramUsername` tylko do odczytu jako „wniosek czeka", status).
 - **Invitations** (dziś placeholder): nagłówek ze statystykami; tabela userów z kontami Matrix, stan każdego konta
   (odznaka z `matrixAccounts`), ostatni wynik z `matrixInviteResults`, przycisk **Invite** per konto (zapisuje żądanie
   w `matrixInviteRequests`, pokazuje „zakolejkowano", odświeża co kilka sekund aż bot przetworzy).

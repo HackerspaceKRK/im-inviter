@@ -172,16 +172,16 @@ z SQLite, osobna nazwa projektu compose wynika z nazwy katalogu).
 1. Konto testowe w Authentiku → ustawienia → wpisz 1 poprawny handle Matrix i 1 z literówką.
 2. W ≤ 60 s: invite przychodzi, w pokoju jest „Dodano … na prośbę …", a w atrybucie `matrixStatus` jest błąd dla literówki.
    Podgląd: Admin → Directory → Users → user → Attributes.
-3. Telegram: wpisz `@username` w Authentiku → `/start` do bota → „Tak, to ja" → w atrybutach pojawia się `telegramVerifiedId`, w DM linki do grup.
-   Wariant bez username: `/start` → kod → wklej w polu w Authentiku → ≤ 60 s `telegramVerifiedId`.
-4. **Zabezpieczenie**: jako zwykły user spróbuj zapisać `telegramVerifiedId` przez
-   `curl -X PATCH -H "Authorization: Bearer <token zwykłego usera>" -d '{"attributes":{"telegramVerifiedId":1}}' $AUTHENTIK_URL/api/v3/core/users/me/` —
-   ma się nie udać. Jeśli się uda, nie ufaj `telegramVerifiedId` w innych aplikacjach, dopóki tego nie zablokujesz.
+3. Telegram: wpisz `@username` w Authentiku → `/start` do bota → „Tak, to ja" → w atrybutach pojawia się ID w `telegramIDs`, w DM linki do grup.
+   Wariant bez username: `/start` → kod → wklej w polu w Authentiku → ≤ 60 s ID w `telegramIDs`.
+4. **Zabezpieczenie**: jako zwykły user spróbuj zapisać `telegramIDs` przez
+   `curl -X PATCH -H "Authorization: Bearer <token zwykłego usera>" -d '{"attributes":{"telegramIDs":["1"]}}' $AUTHENTIK_URL/api/v3/core/users/me/` —
+   ma się nie udać. Jeśli się uda, nie ufaj `telegramIDs` w innych aplikacjach, dopóki tego nie zablokujesz.
 
 ## Migracja atrybutów na camelCase (jednorazowo na instancję)
 
 Nazwy atrybutów zmieniły się: `matrix_handles` → `matrixHandles`, `telegram_username` → `telegramUsername`,
-`telegram_id` → `telegramVerifiedId` (reszta to wartości pochodne, bot liczy je od nowa). **Dane zostają**: bot przy starcie
+`telegram_id` (i krótko używane `telegramVerifiedId`) są **scalane do listy `telegramIDs`** (reszta to wartości pochodne, bot liczy je od nowa). **Dane zostają**: bot przy starcie
 scala stare klucze z nowymi i usuwa stare (szczegóły i tabela w `docs/usermanager-integration.md`, „Migracja atrybutów").
 
 Kolejność wdrożenia na instancji z istniejącymi danymi:

@@ -6,8 +6,8 @@ Jeden bot-demon czyta atrybuty i:
 
 - **Matrix**: zaprasza brakujące konta do pokoi z configu i pisze w pokoju
   `Dodano <handle> na prośbę <username>`.
-- **Telegram**: potwierdza własność konta, zapisuje numeryczne `telegramVerifiedId`, wysyła w DM
-  jednorazowe linki do grup.
+- **Telegram**: potwierdza własność konta, dopisuje jego numeryczne ID do listy `telegramIDs` (user może mieć
+  wiele kont), wysyła w DM jednorazowe linki do grup.
 
 Projekt jest niezależny od k0 — `docker compose up` gdziekolwiek. Wdrożenie krok po kroku (hskrk/hswro): [docs/DEPLOY.md](docs/DEPLOY.md).
 
@@ -19,7 +19,7 @@ Projekt jest niezależny od k0 — `docker compose up` gdziekolwiek. Wdrożenie 
 | `matrixStatus` | bot | `ok` albo opis błędów (zły handle, ban, odmowa invite) |
 | `telegramUsername` | user | wniosek, jeszcze niezweryfikowany — **nie ufać** |
 | `telegramCode` | user | kod z bota, bot kasuje po użyciu |
-| `telegramVerifiedId` | **tylko bot** | zweryfikowane id (liczba) — temu można ufać |
+| `telegramIDs` | admin (usermanager) **i bot** | **lista** numerycznych ID Telegrama (teksty); bot tylko dopisuje zweryfikowane, wpisów admina nie rusza; wiele kont na usera |
 | `telegramStatus` | bot | `ok` / `zły lub wygasły kod` / konflikt |
 
 ## Jak działa weryfikacja Telegrama
@@ -28,7 +28,7 @@ Telegram sam gwarantuje, że `@username` należy do pisającego, więc **token z
 
 1. User wpisuje `@jan_kowalski` w Authentiku.
 2. Pisze `/start` do bota → bot pyta „konto Authentik X prosi o połączenie, to Ty?" (przycisk;
-   chroni przed wpisaniem cudzego @handle) → zapis `telegramVerifiedId`.
+   chroni przed wpisaniem cudzego @handle) → ID konta trafia do `telegramIDs`, a spełniony wniosek `telegramUsername` znika.
 3. Bez username (albo bez wniosku): bot odpowiada jednorazowym kodem (15 min), user wkleja go
    w polu „Kod z Telegrama" w Authentiku, bot dopasowuje przy najbliższym przebiegu (≤ `POLL_INTERVAL`).
 
@@ -87,10 +87,11 @@ Authentika i Matrixa. **Nie pokrywają** realnych API — to kroki E2E poniżej.
 1. Testowy user w Authentiku → ustawienia → wpisz handle (jeden poprawny, jeden z literówką).
 2. W ≤ 60 s: poprawny dostaje invite, w pokoju jest „Dodano … na prośbę …", `matrixStatus` pokazuje
    błąd dla literówki. Drugi przebieg nic nie robi.
-3. Telegram: ścieżka z @username (przycisk) i ścieżka z kodem → `telegramVerifiedId` w atrybutach usera.
-4. **Bezpieczeństwo**: jako zwykły user spróbuj zapisać `attributes.telegramVerifiedId` przez API
-   (`PATCH /api/v3/core/users/me/`) — nie może się udać. Jeśli się da, `telegramVerifiedId` nie jest
-   godne zaufania i trzeba to zablokować po stronie Authentika.
+3. Telegram: ścieżka z @username (przycisk) i ścieżka z kodem → ID w `telegramIDs` usera; drugie konto Telegrama
+   tego samego usera dopisuje się do listy.
+4. **Bezpieczeństwo**: jako zwykły user spróbuj zapisać `attributes.telegramIDs` przez API
+   (`PATCH /api/v3/core/users/me/`) — nie może się udać. Jeśli się da, `telegramIDs` nie jest
+   godne zaufania (inne narzędzia go czytają) i trzeba to zablokować po stronie Authentika.
 
 ## Znane ograniczenia
 
