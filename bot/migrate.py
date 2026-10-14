@@ -12,7 +12,7 @@ import time
 from collections import Counter
 from typing import Any, Dict, List, Optional, Tuple
 
-from .handles import normalize_matrix_handles, normalize_tg_ids
+from .handles import append_tg_id, normalize_matrix_handles, normalize_tg_ids
 
 log = logging.getLogger("migrate")
 
@@ -21,8 +21,8 @@ RENAMES = {
     "matrix_handles": "matrixHandles",
     "telegram_username": "telegramUsername",
 }
-# Stare znaczniki „zweryfikowane ID": źródłem prawdy jest wyłącznie lista `telegramIDs` (wiele kont na usera),
-# więc ich wartość scalamy do `telegramIDs`, a klucz usuwamy.
+# Stare znaczniki „zweryfikowane ID": źródłem prawdy jest wyłącznie `telegramIDs` (wiele kont na usera),
+# więc ich wartość dopisujemy do `telegramIDs` (w jego formacie), a klucz usuwamy.
 ID_LEGACY = ("telegram_id", "telegramVerifiedId")
 # Wartości pochodne albo jednorazowe: bot policzy je od nowa, więc zmiana nazwy nie ma sensu — usuwamy.
 DROP = (
@@ -67,24 +67,20 @@ def plan_migration(attrs: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str], Li
             notes.append("telegram_username: usunięto (nowy klucz już ma wartość lub stary jest pusty)")
         remove.append("telegram_username")
 
-    # telegramIDs to LISTA WSPÓŁDZIELONA z innymi narzędziami, więc zmieniamy ją minimalnie:
-    #  - tablicę zostawiamy bez zmian (nie konwertujemy liczb na teksty, nie usuwamy duplikatów);
-    #  - tylko napis/liczbę (np. "1, 2"; psuje usermanager, który oczekuje tablicy) zamieniamy na tablicę tekstów;
-    #  - stare znaczniki (telegram_id, telegramVerifiedId) DOPISUJEMY do listy, jeśli jeszcze ich tam nie ma.
+    # telegramIDs to pole WSPÓŁDZIELONE z usermanagerem i innymi narzędziami: NIE zmieniamy formatu zapisu
+    # (lista zostaje listą, tekst „1, 2" zostaje tekstem). Jedyna zmiana to dopisanie ID ze starych znaczników
+    # (telegram_id, telegramVerifiedId), jeśli ich jeszcze nie ma, w tym samym formacie co istniejąca wartość.
     current = attrs.get("telegramIDs")
     legacy_present = [k for k in ID_LEGACY if k in attrs]
-    if isinstance(current, list):
-        merged = list(current)
-    else:
-        merged = normalize_tg_ids(current)
-        if current not in _EMPTY and "telegramIDs" in attrs:
-            notes.append("telegramIDs: napis/liczba → lista tekstów")
-    present = {str(x) for x in merged}
-    appended = [t for t in normalize_tg_ids(*(attrs.get(k) for k in legacy_present)) if t not in present]
-    merged += appended
-    if merged != current and (merged or "telegramIDs" in attrs):
-        set_["telegramIDs"] = merged
+    merged = current
+    appended = []
+    for token in normalize_tg_ids(*(attrs.get(k) for k in legacy_present)):
+        updated = append_tg_id(merged, token)
+        if updated != merged:
+            appended.append(token)
+            merged = updated
     if appended:
+        set_["telegramIDs"] = merged
         notes.append(f"telegramIDs: dopisano ze starych kluczy: {', '.join(appended)}")
     for k in legacy_present:
         remove.append(k)

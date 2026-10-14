@@ -728,7 +728,7 @@ def test_migration_merges_handles_renames_and_drops_derived():
     out = _apply(attrs)
     assert out["matrixHandles"] == ["@b:x.y", "@c:x.y", "@a:x.y"]        # nowe pierwsze, bez duplikatów
     assert out["telegramUsername"] == "@jan_kowalski"
-    assert out["telegramIDs"] == ["288245411", "111111111", "567621890", "7"]   # napis → lista + stare znaczniki scalone
+    assert out["telegramIDs"] == "288245411, 111111111, 567621890, 7"          # format (tekst) zostaje, stare znaczniki dopisane
     assert "telegramVerifiedId" not in out and "telegram_id" not in out
     assert out["mifareCardId"] == ["x"]                                   # cudzego nie ruszamy
     assert not [k for k in out if "_" in k]                               # zero starych kluczy snake_case
@@ -825,7 +825,7 @@ def test_telegram_ids_are_read_in_any_stored_form():
     assert find_linked_user(users, 999) is None
     attrs = {"telegramIDs": "288245411, 111111111"}
     add_tg_id(attrs, 7)
-    assert attrs["telegramIDs"] == ["288245411", "111111111", "7"]        # zapis zawsze jako lista tekstów
+    assert attrs["telegramIDs"] == "288245411, 111111111, 7"              # tekst zostaje tekstem (format usermanagera)
 
 
 def test_admin_registered_telegram_id_counts_as_linked_for_start_and_groups():
@@ -842,11 +842,18 @@ def test_migration_never_rewrites_an_existing_array():
         assert plan_migration({"telegramIDs": ids}) == ({}, [], [])
 
 
-def test_migration_converts_only_string_form_to_array():
-    set_, remove, _ = plan_migration({"telegramIDs": "288245411, 111111111"})
-    assert set_ == {"telegramIDs": ["288245411", "111111111"]} and remove == []
-    set_, _, _ = plan_migration({"telegramIDs": 288245411})
-    assert set_ == {"telegramIDs": ["288245411"]}
+def test_migration_never_changes_the_format_of_telegram_ids():
+    for value in ("288245411, 111111111", 288245411, "1;2", ["1", 2]):     # tekst, liczba, inne separatory, lista
+        assert plan_migration({"telegramIDs": value}) == ({}, [], [])      # bez starych kluczy: zero zmian
+
+
+def test_legacy_ids_are_appended_in_the_existing_format():
+    set_, _, _ = plan_migration({"telegramIDs": "1, 2", "telegram_id": 3})
+    assert set_ == {"telegramIDs": "1, 2, 3"}                              # tekst zostaje tekstem
+    set_, _, _ = plan_migration({"telegramIDs": ["1", "2"], "telegram_id": 3})
+    assert set_ == {"telegramIDs": ["1", "2", "3"]}                        # lista zostaje listą
+    set_, _, _ = plan_migration({"telegramIDs": "1, 2", "telegram_id": 2})
+    assert set_ == {}                                                      # już jest: bez zmian
 
 
 def test_migration_appends_legacy_ids_to_existing_array_without_touching_its_elements():
@@ -878,3 +885,16 @@ def test_inventory_is_logged_only_with_audit_but_unknown_keys_always(caplog):
     with caplog.at_level(logging.INFO, logger="migrate"):
         run(run_migration(az, audit=True))
     assert "klucz×userów" in "\n".join(r.getMessage() for r in caplog.records)
+
+
+def test_append_tg_id_preserves_format_and_handles_edge_cases():
+    from bot.handles import append_tg_id
+    assert append_tg_id("1, 2", 3) == "1, 2, 3"
+    assert append_tg_id("1, 2,", 3) == "1, 2, 3"                           # końcowy przecinek nie robi pustej pozycji
+    assert append_tg_id("1, 2", 2) == "1, 2"                                # już jest
+    assert append_tg_id("  ", 3) == ["3"] and append_tg_id("", 3) == ["3"] and append_tg_id(None, 3) == ["3"]
+    assert append_tg_id([], 3) == ["3"] and append_tg_id([1, "2"], "3") == [1, "2", "3"]
+    assert append_tg_id([1, "2"], 1) == [1, "2"]                           # 1 (liczba) == "1" (tekst)
+    assert append_tg_id(5, 5) == ["5"] and append_tg_id(5, 6) == ["5", "6"]
+    original = ["1"]
+    assert append_tg_id(original, 2) is not original and original == ["1"]  # nie mutujemy wejścia

@@ -7,9 +7,9 @@ Kontrakt danych i plan zmian. Źródłem prawdy jest Authentik (atrybuty usera);
 
 1. **Telegram:** wyłącznie lista `telegramIDs` (inne narzędzia ją czytają). Bot dopisuje do niej ID po weryfikacji;
    **nie ma osobnego znacznika „zweryfikowane"** ani limitu jednego konta na usera (usermanager też pozwala na wiele).
-   Lista bywa zapisana jako tablica albo napis „288245411, 111111111"; bot czyta oba. Jest to lista współdzielona z innymi
-   narzędziami, więc bot zmienia ją minimalnie: istniejących tablic **nie przepisuje** (liczby zostają liczbami, duplikatów
-   nie usuwa), tylko dopisuje nowe ID (jako tekst) i zamienia napis na tablicę.
+   Pole bywa zapisane jako lista albo jako tekst „288245411, 111111111" (usermanager pokazuje to jako osobne pozycje). Jest
+   współdzielone z innymi narzędziami, więc bot **nigdy nie zmienia formatu zapisu**: lista zostaje listą, tekst zostaje
+   tekstem (dopisuje „, ID"), elementów nie przepisuje i duplikatów nie usuwa. Dopiero gdy pola nie ma, tworzy listę.
 2. **Ręczny invite:** kolejka w atrybucie usera, wykonuje ją bot przy najbliższym przebiegu (≤ `POLL_INTERVAL`).
    `usermanager` nie dostaje żadnych sekretów Matrixa; uprawnienia pilnuje Authentik.
 3. **Nazwy:** camelCase, zgodnie z konwencją hackerspace'u (`telegramIDs`, `mifareCardId`, …). Pierwotnie planowano snake_case,
@@ -22,7 +22,7 @@ Kontrakt danych i plan zmian. Źródłem prawdy jest Authentik (atrybuty usera);
 |---|---|---|---|
 | `matrixHandles` | `string[]` | user (flow), admin (usermanager) | konta Matrix usera (`@x:serwer`) |
 | `telegramUsername` | `string` | user (flow) | wniosek o weryfikację, niezweryfikowany |
-| `telegramIDs` | `string[]` | admin (ręcznie) **i bot** (po weryfikacji) | numeryczne ID Telegrama, **wiele na usera**; bot tylko dopisuje, niczego nie usuwa |
+| `telegramIDs` | lista tekstów **lub** tekst „1, 2" | admin (ręcznie) **i bot** (po weryfikacji) | numeryczne ID Telegrama, **wiele na usera**; bot tylko dopisuje (w istniejącym formacie), niczego nie usuwa |
 | `telegramStatus` | `string` | bot | `ok` / komunikat błędu |
 | `matrixStatus` | `string` | bot | `ok` / komunikat błędów (tekst zbiorczy) |
 | `matrixAccounts` | `{handle: {state, detail, updated}}` | bot | stan **każdego** konta (poniżej) |
@@ -49,7 +49,7 @@ zapisać stare klucze). Jest idempotentna: user w nowym formacie nie jest zapisy
 |---|---|
 | `matrix_handles` | **scala** z `matrixHandles` (nowe pierwsze, bez duplikatów, znormalizowane), stary usuwa |
 | `telegram_username` | → `telegramUsername` (gdy nowy pusty), stary usuwa |
-| `telegram_id`, `telegramVerifiedId` | **dopisuje** do `telegramIDs` (jeśli ID jeszcze nie ma; istniejących elementów nie zmienia), klucz usuwa |
+| `telegram_id`, `telegramVerifiedId` | **dopisuje** do `telegramIDs` w formacie istniejącej wartości (jeśli ID jeszcze nie ma; reszty nie zmienia), klucz usuwa |
 | `matrix_status`, `matrix_accounts`, `matrix_invite_*`, `telegram_code`, `telegram_status` | **usuwa** (pochodne/jednorazowe, bot policzy od nowa) |
 | puste `matrixHandles` / `telegramUsername` / `telegramCode` (`""`, `[]`) | usuwa (flow ustawień zapisuje puste stringi dla nietkniętych pól) |
 

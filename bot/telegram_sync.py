@@ -21,7 +21,7 @@ import logging
 import time
 from typing import Any, List, Optional, Tuple
 
-from .handles import find_pending_tg_users, normalize_tg_ids, normalize_tg_username
+from .handles import append_tg_id, find_pending_tg_users, normalize_tg_ids, normalize_tg_username
 
 log = logging.getLogger("telegram")
 
@@ -42,13 +42,10 @@ def find_linked_user(users: List[dict], tg_id: int, exclude_pk: Optional[int] = 
 
 
 def add_tg_id(attrs: dict, tg_id: int) -> None:
-    """Dopisuje ID do `telegramIDs` (jako tekst); istniejących wpisów nie ruszamy, nie usuwamy ani nie przepisujemy.
+    """Dopisuje ID do `telegramIDs` ZACHOWUJĄC format zapisu (lista → lista, tekst „1, 2" → tekst „1, 2, ID").
+    Istniejących wpisów nie ruszamy, nie usuwamy ani nie przepisujemy.
     Działa na ŚWIEŻYCH atrybutach (mutate w update_attributes), więc nie gubi równoległych zmian admina."""
-    current = attrs.get("telegramIDs")
-    ids = list(current) if isinstance(current, list) else normalize_tg_ids(current)  # tablicy nie przepisujemy
-    if str(tg_id) not in {str(x) for x in ids}:
-        ids.append(str(tg_id))
-    attrs["telegramIDs"] = ids
+    attrs["telegramIDs"] = append_tg_id(attrs.get("telegramIDs"), tg_id)
 
 
 def clear_matching_username(attrs: dict, tg_username: Optional[str]) -> None:

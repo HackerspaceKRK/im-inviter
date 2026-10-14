@@ -88,6 +88,26 @@ def normalize_tg_ids(*values: Any) -> List[str]:
     return out
 
 
+def append_tg_id(current: Any, tg_id: Any) -> Any:
+    """Dopisuje ID do `telegramIDs` ZACHOWUJĄC format zapisu (to pole współdzielimy z `usermanager` i innymi narzędziami).
+
+    - lista → ta sama lista z nowym ID (jako tekst) na końcu; istniejących elementów nie ruszamy;
+    - tekst „1, 2" → ten sam tekst z „, ID" na końcu (usermanager pokazuje to jako osobne pozycje);
+    - brak/pusto → nowa lista z jednym ID.
+    Gdy ID już jest (porównanie jako tekst), zwraca wartość bez zmian."""
+    token = str(tg_id).strip()
+    if isinstance(current, list):
+        return current if token in {str(x).strip() for x in current} else current + [token]
+    if isinstance(current, str) and current.strip():
+        if token in normalize_tg_ids(current):
+            return current
+        return current.rstrip().rstrip(",;").rstrip() + ", " + token
+    if isinstance(current, (int, float)) and not isinstance(current, bool):
+        existing = str(int(current)) if float(current).is_integer() else str(current)
+        return [existing] if existing == token else [existing, token]
+    return [token]
+
+
 def find_pending_tg_users(users: List[dict], tg_username: str) -> List[dict]:
     """Userzy Authentika, którzy wpisali ten @username jako wniosek o połączenie.
 

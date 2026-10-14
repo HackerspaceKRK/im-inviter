@@ -19,7 +19,7 @@ Projekt jest niezależny od k0 — `docker compose up` gdziekolwiek. Wdrożenie 
 | `matrixStatus` | bot | `ok` albo opis błędów (zły handle, ban, odmowa invite) |
 | `telegramUsername` | user | wniosek, jeszcze niezweryfikowany — **nie ufać** |
 | `telegramCode` | user | kod z bota, bot kasuje po użyciu |
-| `telegramIDs` | admin (usermanager) **i bot** | **lista** numerycznych ID Telegrama (teksty); bot tylko dopisuje zweryfikowane, wpisów admina nie rusza; wiele kont na usera |
+| `telegramIDs` | admin (usermanager) **i bot** | numeryczne ID Telegrama, wiele na usera; format zapisu (lista albo tekst „1, 2") wg usermanagera, **bot go nie zmienia**, tylko dopisuje zweryfikowane ID |
 | `telegramStatus` | bot | `ok` / `zły lub wygasły kod` / konflikt |
 
 ## Jak działa weryfikacja Telegrama
