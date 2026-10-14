@@ -48,7 +48,7 @@ def normalize_tg_username(value: Any) -> Optional[str]:
 
 
 def invite_action(membership: Optional[str], already_invited: bool) -> str:
-    """Co zrobić z parą (handle, pokój): 'invite' | 'skip' | 'banned' | 'left' | 'pending'.
+    """Co zrobić z parą (handle, pokój): 'invite' | 'joined' | 'skip' | 'banned' | 'left' | 'pending'.
 
     membership = wartość z m.room.member (join/invite/leave/ban) albo None gdy brak wpisu.
     already_invited = bot już kiedyś to zaprosił (SQLite). Dzięki temu ktoś, kto świadomie
@@ -57,7 +57,7 @@ def invite_action(membership: Optional[str], already_invited: bool) -> str:
     if membership == "ban":
         return "banned"
     if membership == "join":
-        return "skip"
+        return "joined"
     if membership == "invite":
         return "pending"  # zaproszony, ale jeszcze nie przyjął; zaproszenia w Matrixie nie wygasają
     if membership == "leave" and already_invited:
@@ -75,15 +75,15 @@ def pending_age_label(age_seconds: float) -> str:
 
 
 def find_pending_tg_users(users: List[dict], tg_username: str) -> List[dict]:
-    """Userzy Authentika, którzy wpisali ten @username i nie mają jeszcze telegram_id."""
+    """Userzy Authentika, którzy wpisali ten @username i nie mają jeszcze telegramVerifiedId."""
     want = normalize_tg_username(tg_username)
     if not want:
         return []
     out = []
     for u in users:
         attrs = u.get("attributes") or {}
-        if attrs.get("telegram_id"):
+        if attrs.get("telegramVerifiedId"):
             continue
-        if normalize_tg_username(attrs.get("telegram_username")) == want:
+        if normalize_tg_username(attrs.get("telegramUsername")) == want:
             out.append(u)
     return out

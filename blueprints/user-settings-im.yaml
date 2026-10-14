@@ -91,7 +91,7 @@ entries:
     id: p-matrix
     identifiers: {name: im-sync-matrix-handles}
     attrs:
-      field_key: attributes.matrix_handles
+      field_key: attributes.matrixHandles
       label: Konta Matrix
       type: text_area
       required: false
@@ -101,7 +101,8 @@ entries:
       initial_value_expression: true
       initial_value: |
         try:
-            v = user.attributes.get("matrix_handles") or []
+            # fallback na stary klucz na czas migracji (bot scala go przy starcie i co godzinę)
+            v = user.attributes.get("matrixHandles") or user.attributes.get("matrix_handles") or []
             return v if isinstance(v, str) else "\n".join(v)
         except Exception:
             return ""
@@ -110,7 +111,7 @@ entries:
     id: p-tg-username
     identifiers: {name: im-sync-telegram-username}
     attrs:
-      field_key: attributes.telegram_username
+      field_key: attributes.telegramUsername
       label: Telegram @username
       type: text
       required: false
@@ -120,7 +121,7 @@ entries:
       initial_value_expression: true
       initial_value: |
         try:
-            return user.attributes.get("telegram_username", "")
+            return user.attributes.get("telegramUsername") or user.attributes.get("telegram_username") or ""
         except Exception:
             return ""
 
@@ -128,7 +129,7 @@ entries:
     id: p-tg-code
     identifiers: {name: im-sync-telegram-code}
     attrs:
-      field_key: attributes.telegram_code
+      field_key: attributes.telegramCode
       label: Kod z Telegrama (tylko gdy nie masz @username)
       type: text
       required: false

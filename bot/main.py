@@ -5,10 +5,12 @@ import argparse
 import asyncio
 import logging
 import os
+import time
 from typing import List
 
 from .authentik import Authentik
 from .matrix_sync import Matrix, run_matrix_cycle
+from .migrate import INVENTORY_EVERY, run_migration
 from .state import State
 from .telegram_sync import TelegramLogic
 
@@ -57,9 +59,18 @@ async def amain(dry_run: bool, once: bool) -> None:
     elif os.environ.get("TELEGRAM_TOKEN"):
         log.info("dry-run: Telegram wyłączony")
 
+    last_migration = 0.0
     try:
         while True:
             try:
+                # Przegląd atrybutów (stare nazwy → camelCase, scalenie, sprzątanie): na starcie i co godzinę,
+                # bo stary blueprint/flow może jeszcze zapisać stare klucze.
+                if time.time() - last_migration >= INVENTORY_EVERY:
+                    last_migration = time.time()
+                    try:
+                        await run_migration(authentik, dry_run)
+                    except Exception:
+                        log.exception("migracja atrybutów nie powiodła się (bot działa dalej)")
                 if matrix:
                     log.info("matrix: %s", await run_matrix_cycle(
                         authentik, matrix, state, rooms, dry_run, spaces, notify_room, pending_after))

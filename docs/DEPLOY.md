@@ -65,8 +65,8 @@ Weryfikacja bez klikania (preflight sprawdza to samo): `python -m bot.preflight`
 i szuka naszych trzech pól.
 
 Gdy blueprint się nie zaaplikuje: utwórz Prompty ręcznie (`field_key`: `username`, `name`, `email`,
-`attributes.settings.locale` oraz `attributes.matrix_handles` (Text Area), `attributes.telegram_username`,
-`attributes.telegram_code`), Prompt Stage z nimi, User Write Stage (`never_create`), flow o designation
+`attributes.settings.locale` oraz `attributes.matrixHandles` (Text Area), `attributes.telegramUsername`,
+`attributes.telegramCode`), Prompt Stage z nimi, User Write Stage (`never_create`), flow o designation
 *Stage configuration* i dopnij oba stage'e (prompt → order 20, write → order 100).
 **Zapisz u nas, co dokładnie zadziałało** (sekcja „Notatki z wdrożeń" na dole).
 
@@ -170,26 +170,43 @@ z SQLite, osobna nazwa projektu compose wynika z nazwy katalogu).
 ## 6. Test E2E po wdrożeniu
 
 1. Konto testowe w Authentiku → ustawienia → wpisz 1 poprawny handle Matrix i 1 z literówką.
-2. W ≤ 60 s: invite przychodzi, w pokoju jest „Dodano … na prośbę …", a w atrybucie `matrix_status` jest błąd dla literówki.
+2. W ≤ 60 s: invite przychodzi, w pokoju jest „Dodano … na prośbę …", a w atrybucie `matrixStatus` jest błąd dla literówki.
    Podgląd: Admin → Directory → Users → user → Attributes.
-3. Telegram: wpisz `@username` w Authentiku → `/start` do bota → „Tak, to ja" → w atrybutach pojawia się `telegram_id`, w DM linki do grup.
-   Wariant bez username: `/start` → kod → wklej w polu w Authentiku → ≤ 60 s `telegram_id`.
-4. **Zabezpieczenie**: jako zwykły user spróbuj zapisać `telegram_id` przez
-   `curl -X PATCH -H "Authorization: Bearer <token zwykłego usera>" -d '{"attributes":{"telegram_id":1}}' $AUTHENTIK_URL/api/v3/core/users/me/` —
-   ma się nie udać. Jeśli się uda, nie ufaj `telegram_id` w innych aplikacjach, dopóki tego nie zablokujesz.
+3. Telegram: wpisz `@username` w Authentiku → `/start` do bota → „Tak, to ja" → w atrybutach pojawia się `telegramVerifiedId`, w DM linki do grup.
+   Wariant bez username: `/start` → kod → wklej w polu w Authentiku → ≤ 60 s `telegramVerifiedId`.
+4. **Zabezpieczenie**: jako zwykły user spróbuj zapisać `telegramVerifiedId` przez
+   `curl -X PATCH -H "Authorization: Bearer <token zwykłego usera>" -d '{"attributes":{"telegramVerifiedId":1}}' $AUTHENTIK_URL/api/v3/core/users/me/` —
+   ma się nie udać. Jeśli się uda, nie ufaj `telegramVerifiedId` w innych aplikacjach, dopóki tego nie zablokujesz.
+
+## Migracja atrybutów na camelCase (jednorazowo na instancję)
+
+Nazwy atrybutów zmieniły się: `matrix_handles` → `matrixHandles`, `telegram_username` → `telegramUsername`,
+`telegram_id` → `telegramVerifiedId` (reszta to wartości pochodne, bot liczy je od nowa). **Dane zostają**: bot przy starcie
+scala stare klucze z nowymi i usuwa stare (szczegóły i tabela w `docs/usermanager-integration.md`, „Migracja atrybutów").
+
+Kolejność wdrożenia na instancji z istniejącymi danymi:
+1. **Podgląd:** `docker compose run --rm bot python -m bot.main --dry-run --once` → w logu `[dry-run] migracja atrybutów usera …`
+   dla każdego, kogo to dotyczy, oraz inwentarz kluczy i ewentualne „nieznane atrybuty".
+2. **Zaktualizuj blueprint** (Admin → Customization → Blueprints → treść z `blueprints/user-settings-im.yaml`, *Apply*):
+   pola formularza zapisują teraz `attributes.matrixHandles` / `telegramUsername` / `telegramCode`. Podpowiedzi w polach mają
+   fallback na stare klucze, więc userzy nie zobaczą pustych formularzy w trakcie przejścia.
+3. **Wdróż bota** (`git pull && docker compose up -d --build`). Migracja uruchamia się przy starcie i co godzinę, więc
+   kolejność kroków 2 i 3 nie jest krytyczna (stare zapisy ze starego formularza zostaną dościągnięte w ciągu godziny).
+4. **Sprawdź** `docker compose logs --tail=50 bot`: `migracja: userów N, zmieniono M` i brak ostrzeżeń o nieznanych atrybutach
+   (albo ich lista do ręcznego przejrzenia).
 
 ## Odrzucone zaproszenia i ponowne zapraszanie
 
 - **Odrzucone zaproszenie wygląda w Matrixie jak wyjście z pokoju (`leave`).** Bot go nie ponawia (inaczej zapraszałby
-  co minutę kogoś, kto powiedział „nie"), ale zapisuje w `matrix_status` usera: „@x odrzucił zaproszenie lub wyszedł z: <nazwa>".
+  co minutę kogoś, kto powiedział „nie"), ale zapisuje w `matrixStatus` usera: „@x odrzucił zaproszenie lub wyszedł z: <nazwa>".
 - **Ponowne zaproszenie:** user usuwa handle z ustawień Authentika i dopisuje z powrotem. Bot zapomina handle'e, których
   nikt już nie ma wpisanych (przy najbliższym przebiegu, ≤ `POLL_INTERVAL`), więc dopisany handle jest zapraszany od nowa.
 - **Nieprzyjęte zaproszenia** (stan `invite`): zaproszenia w Matrixie nie wygasają i nie da się ich „ponowić", więc bot
-  nic z nimi nie robi, ale po `MATRIX_PENDING_AFTER_HOURS` (domyślnie 24, `0` = wyłączone) wpisuje w `matrix_status`:
+  nic z nimi nie robi, ale po `MATRIX_PENDING_AFTER_HOURS` (domyślnie 24, `0` = wyłączone) wpisuje w `matrixStatus`:
   „@x nie przyjął zaproszenia do: <nazwa> (ponad dobę / ponad 3 dni)". Opis wieku jest gruby, żeby status nie zmieniał
   się co godzinę. Dotyczy tylko zaproszeń wysłanych przez bota (cudzych nie nagabuje). Po akceptacji status wraca do `ok`.
   Test na żywo: usuń i dopisz handle (nowe zaproszenie), nie przyjmuj, uruchom bota z `MATRIX_PENDING_AFTER_HOURS=0.02`
-  i po ~2 minutach zobacz atrybut `matrix_status` w Authentiku.
+  i po ~2 minutach zobacz atrybut `matrixStatus` w Authentiku.
 - Zapominanie dotyczy wyłącznie pamięci bota (SQLite). **Nikogo nie wyrzuca** z pokoi (usuwanie jest osobną, jeszcze
   niezaimplementowaną funkcją).
 - Ręcznie, bez ruszania Authentika: zaproś konto z Elementa albo skasuj parę z bazy
@@ -198,7 +215,7 @@ z SQLite, osobna nazwa projektu compose wynika z nazwy katalogu).
 ## Nieudane zaproszenia, limity (429) i niedostępne serwery
 
 - **Odstęp po porażce:** nieudane zaproszenie bot ponawia z rosnącym odstępem 5 min → 15 min → 1 h → 6 h → 24 h
-  (potem co 24 h), zamiast co minutę. Moment kolejnej próby jest w `matrix_status` („… (następna próba 10:15 UTC)"),
+  (potem co 24 h), zamiast co minutę. Moment kolejnej próby jest w `matrixStatus` („… (następna próba 10:15 UTC)"),
   a po sukcesie status wraca do `ok`. Odstęp resetuje się, gdy usuniesz handle z Authentika i dopiszesz go z powrotem.
 - **`429 Too Many Requests`:** bot respektuje `retry_after_ms` z odpowiedzi i **przestaje wysyłać zaproszenia do końca
   przebiegu** (kolejne dostaną swoją kolej w następnych). Wiadomość „Dodano…" jest osobno: jej porażka (np. limit wiadomości)
@@ -234,8 +251,8 @@ Utrata stanu (SQLite) = bot może ponownie zaprosić osoby, które świadomie wy
 | Objaw | Przyczyna | Co zrobić |
 |---|---|---|
 | `preflight`: token Authentika 403 | Za mało uprawnień | Dodaj View/Change user |
-| `matrix_status`: `403 …` przy handle | Bot bez power levelu albo user nie istnieje | `preflight` pokaże power level; sprawdź handle |
-| `matrix_status`: `… ma bana w …` | Ban w pokoju | Zdejmij bana (bot nie zdejmuje sam) |
+| `matrixStatus`: `403 …` przy handle | Bot bez power levelu albo user nie istnieje | `preflight` pokaże power level; sprawdź handle |
+| `matrixStatus`: `… ma bana w …` | Ban w pokoju | Zdejmij bana (bot nie zdejmuje sam) |
 | Brak „Dodano…" w pokoju mimo invite | Pokój zaszyfrowany | Wyłącz szyfrowanie albo zaakceptuj brak wiadomości |
 | Telegram: brak linków do grup | Bot nie jest adminem z „Invite users" | `preflight` wskaże grupę |
 | Pola nie pojawiają się w ustawieniach | Blueprint nie zaaplikowany | Admin → Blueprints → status; ręczny wariant z kroku 2 |
@@ -260,7 +277,7 @@ Utrata stanu (SQLite) = bot może ponownie zaprosić osoby, które świadomie wy
     Stage Bindings (prompt 20, write 100), dopiero potem przełącz brand. `order` jest w `attrs`
     blueprintu, nie w `identifiers` (inaczej ponowne zastosowanie robi duplikat). Preflight wykrywa ten stan.
   - E2E Matrix (2026-10-13): handle wpisany w ustawieniach → bot zamienia string na listę, zaprasza,
-    pisze `Dodano @… na prośbę <user>` (m.notice), ustawia `matrix_status: ok`; drugi przebieg nic nie robi.
+    pisze `Dodano @… na prośbę <user>` (m.notice), ustawia `matrixStatus: ok`; drugi przebieg nic nie robi.
   - Telegram: jeszcze nie testowany.
   - Przestrzenie (2026-10-13, testowa „im-sync test" na masmiks.wtf): `MATRIX_SPACES` + `MATRIX_NOTIFY_ROOM` →
     zaproszenie tylko do space (`invite`), wiadomość w pokoju powiadomień, drugi przebieg nic nie robi.

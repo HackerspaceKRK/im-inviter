@@ -6,7 +6,7 @@ Jeden bot-demon czyta atrybuty i:
 
 - **Matrix**: zaprasza brakujące konta do pokoi z configu i pisze w pokoju
   `Dodano <handle> na prośbę <username>`.
-- **Telegram**: potwierdza własność konta, zapisuje numeryczne `telegram_id`, wysyła w DM
+- **Telegram**: potwierdza własność konta, zapisuje numeryczne `telegramVerifiedId`, wysyła w DM
   jednorazowe linki do grup.
 
 Projekt jest niezależny od k0 — `docker compose up` gdziekolwiek. Wdrożenie krok po kroku (hskrk/hswro): [docs/DEPLOY.md](docs/DEPLOY.md).
@@ -15,12 +15,12 @@ Projekt jest niezależny od k0 — `docker compose up` gdziekolwiek. Wdrożenie 
 
 | Atrybut | Pisze | Znaczenie |
 |---|---|---|
-| `matrix_handles` | user, potem bot normalizuje | **lista** `@x:serwer` (małe litery, bez duplikatów) |
-| `matrix_status` | bot | `ok` albo opis błędów (zły handle, ban, odmowa invite) |
-| `telegram_username` | user | wniosek, jeszcze niezweryfikowany — **nie ufać** |
-| `telegram_code` | user | kod z bota, bot kasuje po użyciu |
-| `telegram_id` | **tylko bot** | zweryfikowane id (liczba) — temu można ufać |
-| `telegram_status` | bot | `ok` / `zły lub wygasły kod` / konflikt |
+| `matrixHandles` | user, potem bot normalizuje | **lista** `@x:serwer` (małe litery, bez duplikatów) |
+| `matrixStatus` | bot | `ok` albo opis błędów (zły handle, ban, odmowa invite) |
+| `telegramUsername` | user | wniosek, jeszcze niezweryfikowany — **nie ufać** |
+| `telegramCode` | user | kod z bota, bot kasuje po użyciu |
+| `telegramVerifiedId` | **tylko bot** | zweryfikowane id (liczba) — temu można ufać |
+| `telegramStatus` | bot | `ok` / `zły lub wygasły kod` / konflikt |
 
 ## Jak działa weryfikacja Telegrama
 
@@ -28,7 +28,7 @@ Telegram sam gwarantuje, że `@username` należy do pisającego, więc **token z
 
 1. User wpisuje `@jan_kowalski` w Authentiku.
 2. Pisze `/start` do bota → bot pyta „konto Authentik X prosi o połączenie, to Ty?" (przycisk;
-   chroni przed wpisaniem cudzego @handle) → zapis `telegram_id`.
+   chroni przed wpisaniem cudzego @handle) → zapis `telegramVerifiedId`.
 3. Bez username (albo bez wniosku): bot odpowiada jednorazowym kodem (15 min), user wkleja go
    w polu „Kod z Telegrama" w Authentiku, bot dopasowuje przy najbliższym przebiegu (≤ `POLL_INTERVAL`).
 
@@ -49,7 +49,7 @@ Grupy: bot **nie może** dodać usera do grupy po id (ograniczenie API). Wysyła
    potem **ręcznie** Admin → System → Brands → *User settings flow* = `im-sync-user-settings-flow`
    (szczegóły i cofnięcie: [docs/DEPLOY.md](docs/DEPLOY.md), krok 2). Otwórz jako zwykły user
    `/if/user/#/settings` i sprawdź, czy są pola. Jeśli blueprint się nie zaaplikował, utwórz 3 Prompty
-   z `field_key` `attributes.matrix_handles` / `attributes.telegram_username` / `attributes.telegram_code`
+   z `field_key` `attributes.matrixHandles` / `attributes.telegramUsername` / `attributes.telegramCode`
    ręcznie i dopnij Prompt Stage do `default-user-settings-flow` przed etapem zapisu.
 3. **Matrix**: załóż konto bota, weź access token (Element → Settings → Help & About → Access Token, albo
    `POST /_matrix/client/v3/login`). Daj botowi w pokojach power level ≥ „Invite". Pokoje mają być
@@ -85,18 +85,18 @@ Authentika i Matrixa. **Nie pokrywają** realnych API — to kroki E2E poniżej.
 ## Test E2E (masmiks.wtf)
 
 1. Testowy user w Authentiku → ustawienia → wpisz handle (jeden poprawny, jeden z literówką).
-2. W ≤ 60 s: poprawny dostaje invite, w pokoju jest „Dodano … na prośbę …", `matrix_status` pokazuje
+2. W ≤ 60 s: poprawny dostaje invite, w pokoju jest „Dodano … na prośbę …", `matrixStatus` pokazuje
    błąd dla literówki. Drugi przebieg nic nie robi.
-3. Telegram: ścieżka z @username (przycisk) i ścieżka z kodem → `telegram_id` w atrybutach usera.
-4. **Bezpieczeństwo**: jako zwykły user spróbuj zapisać `attributes.telegram_id` przez API
-   (`PATCH /api/v3/core/users/me/`) — nie może się udać. Jeśli się da, `telegram_id` nie jest
+3. Telegram: ścieżka z @username (przycisk) i ścieżka z kodem → `telegramVerifiedId` w atrybutach usera.
+4. **Bezpieczeństwo**: jako zwykły user spróbuj zapisać `attributes.telegramVerifiedId` przez API
+   (`PATCH /api/v3/core/users/me/`) — nie może się udać. Jeśli się da, `telegramVerifiedId` nie jest
    godne zaufania i trzeba to zablokować po stronie Authentika.
 
 ## Znane ograniczenia
 
 - Bot nie usuwa/nie wyrzuca kont po skasowaniu handle'a z atrybutu.
 - Kto odrzucił zaproszenie albo wyszedł z pokoju, nie jest zapraszany ponownie (pamięć w SQLite), a
-  `matrix_status` mówi to wprost („… odrzucił zaproszenie lub wyszedł z: <nazwa>"). Ponowne zaproszenie:
+  `matrixStatus` mówi to wprost („… odrzucił zaproszenie lub wyszedł z: <nazwa>"). Ponowne zaproszenie:
   usuń handle z Authentika i dopisz z powrotem (bot zapomina handle'e, których nikt już nie ma wpisanych).
   Utrata `/data/state.db` oznacza ponowne zaproszenie takich osób.
 - Polling co `POLL_INTERVAL` s, bez webhooków z Authentika.

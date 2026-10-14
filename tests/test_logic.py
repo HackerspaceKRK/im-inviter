@@ -34,7 +34,7 @@ def test_normalize_tg_username():
 
 def test_invite_action():
     assert invite_action("ban", False) == "banned"
-    assert invite_action("join", False) == "skip"
+    assert invite_action("join", False) == "joined"
     assert invite_action("invite", False) == "pending"  # czeka na akceptację
     assert invite_action(None, False) == "invite"
     assert invite_action("leave", False) == "invite"
@@ -44,8 +44,8 @@ def test_invite_action():
 
 def test_find_pending_tg_users_skips_linked():
     users = [
-        {"pk": 1, "attributes": {"telegram_username": "@Jan_Kowalski"}},
-        {"pk": 2, "attributes": {"telegram_username": "@jan_kowalski", "telegram_id": 5}},
+        {"pk": 1, "attributes": {"telegramUsername": "@Jan_Kowalski"}},
+        {"pk": 2, "attributes": {"telegramUsername": "@jan_kowalski", "telegramVerifiedId": 5}},
     ]
     assert [u["pk"] for u in find_pending_tg_users(users, "jan_kowalski")] == [1]
 
@@ -66,16 +66,22 @@ class FakeAuthentik:
         self.users = users
         self.writes = []
 
-    async def list_users(self):
+    async def list_users(self, include_inactive=False):
         return self.users
 
-    async def update_attributes(self, pk, set_=None, remove=()):
+    before_write = None  # symulacja: admin dopisuje coś do atrybutów tuż przed zapisem bota
+
+    async def update_attributes(self, pk, set_=None, remove=(), mutate=None):
         self.writes.append((pk, set_ or {}, list(remove)))
         for u in self.users:
             if u["pk"] == pk:
+                if self.before_write:
+                    self.before_write(u["attributes"])
                 u["attributes"].update(set_ or {})
                 for k in remove:
                     u["attributes"].pop(k, None)
+                if mutate:
+                    mutate(u["attributes"])
 
 
 class FakeMatrix:
@@ -108,7 +114,7 @@ class FakeMatrix:
 
 
 def matrix_user(raw):
-    return {"pk": 7, "username": "jan", "attributes": {"matrix_handles": raw}}
+    return {"pk": 7, "username": "jan", "attributes": {"matrixHandles": raw}}
 
 
 # ---------- matrix cycle ----------
@@ -126,8 +132,8 @@ def test_cycle_normalizes_string_to_list_and_sets_status():
     az, mx = FakeAuthentik([matrix_user("@A:x.y zle")]), FakeMatrix()
     run(run_matrix_cycle(az, mx, State(), ["!r"]))
     attrs = az.users[0]["attributes"]
-    assert attrs["matrix_handles"] == ["@a:x.y"]
-    assert "niepoprawny handle: zle" in attrs["matrix_status"]
+    assert attrs["matrixHandles"] == ["@a:x.y"]
+    assert "niepoprawny handle: zle" in attrs["matrixStatus"]
 
 
 def test_cycle_one_failure_does_not_stop_others():
@@ -135,7 +141,7 @@ def test_cycle_one_failure_does_not_stop_others():
     stats = run(run_matrix_cycle(az, mx, State(), ["!r"]))
     assert mx.invites == [("!r", "@ok:x.y")]
     assert stats["errors"] == 1
-    assert "@bad:x.y" in az.users[0]["attributes"]["matrix_status"]
+    assert "@bad:x.y" in az.users[0]["attributes"]["matrixStatus"]
 
 
 def test_cycle_left_user_not_reinvited_and_dry_run_is_silent():
@@ -155,7 +161,7 @@ def tg_user(pk, **attrs):
 
 
 def test_start_with_matching_username_asks_confirmation():
-    az = FakeAuthentik([tg_user(1, telegram_username="@Jan_Kowalski")])
+    az = FakeAuthentik([tg_user(1, telegramUsername="@Jan_Kowalski")])
     text, pk = run(TelegramLogic(az, State(), []).start_reply(99, "jan_kowalski"))
     assert pk == 1 and "u1" in text
 
@@ -167,28 +173,28 @@ def test_start_without_request_gives_code_that_works_in_poll():
     text, pk = run(logic.start_reply(99, None))
     assert pk is None
     code = [w for w in text.split() if len(w) == 8 and w.isupper()][0]
-    az.users[0]["attributes"]["telegram_code"] = code
+    az.users[0]["attributes"]["telegramCode"] = code
     assert run(logic.poll_codes()) == 1
     attrs = az.users[0]["attributes"]
-    assert attrs["telegram_id"] == 99 and attrs["telegram_status"] == "ok"
-    assert "telegram_code" not in attrs
+    assert attrs["telegramVerifiedId"] == 99 and attrs["telegramStatus"] == "ok"
+    assert "telegramCode" not in attrs
 
 
 def test_bad_code_is_cleared_with_status():
-    az = FakeAuthentik([tg_user(1, telegram_code="ZZZZZZZZ")])
+    az = FakeAuthentik([tg_user(1, telegramCode="ZZZZZZZZ")])
     assert run(TelegramLogic(az, State(), []).poll_codes()) == 0
-    assert az.users[0]["attributes"]["telegram_status"] == "zły lub wygasły kod"
-    assert "telegram_code" not in az.users[0]["attributes"]
+    assert az.users[0]["attributes"]["telegramStatus"] == "zły lub wygasły kod"
+    assert "telegramCode" not in az.users[0]["attributes"]
 
 
 def test_link_refuses_id_owned_by_other_user():
-    az = FakeAuthentik([tg_user(1, telegram_id=99), tg_user(2)])
+    az = FakeAuthentik([tg_user(1, telegramVerifiedId=99), tg_user(2)])
     ok, _ = run(TelegramLogic(az, State(), []).link(2, 99))
-    assert not ok and "telegram_id" not in az.users[1]["attributes"]
+    assert not ok and "telegramVerifiedId" not in az.users[1]["attributes"]
 
 
 def test_already_linked_start_reply():
-    az = FakeAuthentik([tg_user(1, telegram_id=99)])
+    az = FakeAuthentik([tg_user(1, telegramVerifiedId=99)])
     text, pk = run(TelegramLogic(az, State(), []).start_reply(99, "x"))
     assert pk is None and "już połączone" in text
 
@@ -210,11 +216,11 @@ def test_space_without_notify_room_is_silent_and_room_still_gets_message():
 
 
 def test_code_from_already_linked_user_gets_status_and_is_cleared():
-    az = FakeAuthentik([tg_user(1, telegram_id=99, telegram_code="ABCDEFGH")])
+    az = FakeAuthentik([tg_user(1, telegramVerifiedId=99, telegramCode="ABCDEFGH")])
     assert run(TelegramLogic(az, State(), []).poll_codes()) == 0
     attrs = az.users[0]["attributes"]
-    assert attrs["telegram_id"] == 99  # nie ruszone
-    assert "telegram_code" not in attrs and "już połączony" in attrs["telegram_status"]
+    assert attrs["telegramVerifiedId"] == 99  # nie ruszone
+    assert "telegramCode" not in attrs and "już połączony" in attrs["telegramStatus"]
 
 
 def test_new_start_does_not_invalidate_previous_codes_but_is_capped():
@@ -272,7 +278,7 @@ def test_group_links_title_falls_back_to_id():
 
 
 def test_groups_command_only_for_linked_users():
-    az = FakeAuthentik([tg_user(1, telegram_id=99), tg_user(2)])
+    az = FakeAuthentik([tg_user(1, telegramVerifiedId=99), tg_user(2)])
     logic = TelegramLogic(az, State(), [-1])
     assert run(logic.groups_reply(99)) == (True, "")
     ok, text = run(logic.groups_reply(12345))
@@ -286,7 +292,7 @@ def test_user_link_is_matrix_to_user_link_and_escapes():
 
 
 def test_notice_has_plain_body_and_html_user_link_with_escaped_username():
-    az = FakeAuthentik([{"pk": 7, "username": "jan<b>", "attributes": {"matrix_handles": "@a:x.y"}}])
+    az = FakeAuthentik([{"pk": 7, "username": "jan<b>", "attributes": {"matrixHandles": "@a:x.y"}}])
     mx = FakeMatrix()
     run(run_matrix_cycle(az, mx, State(), ["!r"]))
     assert mx.notices == [("!r", "Dodano @a:x.y na prośbę jan<b>")]  # body: czysty tekst
@@ -299,7 +305,7 @@ def test_declined_invite_is_reported_in_status_with_room_name_and_not_reinvited(
     az, mx = FakeAuthentik([matrix_user("@a:x.y")]), FakeMatrix({("!r", "@a:x.y"): "leave"})
     run(run_matrix_cycle(az, mx, st, ["!r"]))
     assert mx.invites == []
-    assert az.users[0]["attributes"]["matrix_status"] == "@a:x.y odrzucił zaproszenie lub wyszedł z: Pokój R"
+    assert az.users[0]["attributes"]["matrixStatus"] == "@a:x.y odrzucił zaproszenie lub wyszedł z: Pokój R"
 
 
 def test_removing_handle_forgets_it_so_readding_reinvites():
@@ -310,10 +316,10 @@ def test_removing_handle_forgets_it_so_readding_reinvites():
     mx.members[("!r", "@a:x.y")] = "leave"               # odrzucił
     run(run_matrix_cycle(az, mx, st, ["!r"]))
     assert len(mx.invites) == 1                          # nie ponawiamy
-    user["attributes"]["matrix_handles"] = []            # user usuwa handle
+    user["attributes"]["matrixHandles"] = []            # user usuwa handle
     run(run_matrix_cycle(az, mx, st, ["!r"]))
     assert not st.was_invited("@a:x.y", "!r")            # pamięć wyczyszczona
-    user["attributes"]["matrix_handles"] = ["@a:x.y"]    # dopisuje z powrotem
+    user["attributes"]["matrixHandles"] = ["@a:x.y"]    # dopisuje z powrotem
     run(run_matrix_cycle(az, mx, st, ["!r"]))
     assert len(mx.invites) == 2                          # zaproszony ponownie
 
@@ -346,10 +352,10 @@ def test_pending_invite_reported_only_after_threshold():
     az, mx = FakeAuthentik([matrix_user("@a:x.y")]), FakeMatrix({("!r", "@a:x.y"): "invite"})
     _age_invite(st, "@a:x.y", "!r", hours=2)
     run(run_matrix_cycle(az, mx, st, ["!r"], pending_after_hours=24))
-    assert az.users[0]["attributes"]["matrix_status"] == "ok"  # za wcześnie
+    assert az.users[0]["attributes"]["matrixStatus"] == "ok"  # za wcześnie
     _age_invite(st, "@a:x.y", "!r", hours=30)
     run(run_matrix_cycle(az, mx, st, ["!r"], pending_after_hours=24))
-    assert az.users[0]["attributes"]["matrix_status"] == "@a:x.y nie przyjął zaproszenia do: Pokój R (ponad dobę)"
+    assert az.users[0]["attributes"]["matrixStatus"] == "@a:x.y nie przyjął zaproszenia do: Pokój R (ponad dobę)"
     assert mx.invites == []  # nie ponawiamy
 
 
@@ -358,20 +364,20 @@ def test_pending_status_clears_when_invite_is_accepted():
     az, mx = FakeAuthentik([matrix_user("@a:x.y")]), FakeMatrix({("!r", "@a:x.y"): "invite"})
     _age_invite(st, "@a:x.y", "!r", hours=30)
     run(run_matrix_cycle(az, mx, st, ["!r"]))
-    assert "nie przyjął" in az.users[0]["attributes"]["matrix_status"]
+    assert "nie przyjął" in az.users[0]["attributes"]["matrixStatus"]
     mx.members[("!r", "@a:x.y")] = "join"
     run(run_matrix_cycle(az, mx, st, ["!r"]))
-    assert az.users[0]["attributes"]["matrix_status"] == "ok"
+    assert az.users[0]["attributes"]["matrixStatus"] == "ok"
 
 
 def test_pending_ignored_for_invites_not_made_by_bot_and_when_disabled():
     st = State()  # bot nie zapraszał, więc brak zapisu w bazie
     az, mx = FakeAuthentik([matrix_user("@a:x.y")]), FakeMatrix({("!r", "@a:x.y"): "invite"})
     run(run_matrix_cycle(az, mx, st, ["!r"], pending_after_hours=1))
-    assert az.users[0]["attributes"]["matrix_status"] == "ok"
+    assert az.users[0]["attributes"]["matrixStatus"] == "ok"
     _age_invite(st, "@a:x.y", "!r", hours=500)
     run(run_matrix_cycle(az, mx, st, ["!r"], pending_after_hours=0))  # 0 = wyłączone
-    assert az.users[0]["attributes"]["matrix_status"] == "ok"
+    assert az.users[0]["attributes"]["matrixStatus"] == "ok"
 
 
 def test_matrix_resolves_aliases_once_and_uses_room_id_in_api_calls():
@@ -436,15 +442,15 @@ def test_failed_invite_backs_off_then_retries_and_clears_failure_on_success():
     az, mx = FakeAuthentik([matrix_user("@a:x.y")]), FakeMatrix()
     mx.errors["@a:x.y"] = _http_error(502)
     run(run_matrix_cycle(az, mx, st, ["!r"]))
-    assert len(mx.attempts) == 1 and "502" in az.users[0]["attributes"]["matrix_status"]
-    assert "następna próba" in az.users[0]["attributes"]["matrix_status"]
+    assert len(mx.attempts) == 1 and "502" in az.users[0]["attributes"]["matrixStatus"]
+    assert "następna próba" in az.users[0]["attributes"]["matrixStatus"]
     run(run_matrix_cycle(az, mx, st, ["!r"]))   # zaraz potem: odstęp trwa, brak kolejnego żądania
     assert len(mx.attempts) == 1
     st.db.execute("UPDATE failures SET next_retry=?", (time.time() - 1,)); st.db.commit()
     del mx.errors["@a:x.y"]                      # serwer wrócił
     run(run_matrix_cycle(az, mx, st, ["!r"]))
     assert len(mx.attempts) == 2 and mx.invites == [("!r", "@a:x.y")]
-    assert st.failure("@a:x.y", "!r") is None and az.users[0]["attributes"]["matrix_status"] == "ok"
+    assert st.failure("@a:x.y", "!r") is None and az.users[0]["attributes"]["matrixStatus"] == "ok"
 
 
 def test_backoff_grows_and_is_capped():
@@ -484,7 +490,7 @@ def test_notice_failure_does_not_undo_or_retry_the_invite():
     mx.notice_error = _http_error(429, {"retry_after_ms": 1000})
     run(run_matrix_cycle(az, mx, st, ["!r"]))
     assert mx.invites == [("!r", "@a:x.y")] and st.was_invited("@a:x.y", "!r")
-    assert az.users[0]["attributes"]["matrix_status"] == "ok"
+    assert az.users[0]["attributes"]["matrixStatus"] == "ok"
     mx.notice_error = None
     run(run_matrix_cycle(az, mx, st, ["!r"]))
     assert len(mx.invites) == 1                    # nie zapraszamy drugi raz tylko dlatego, że wiadomość padła
@@ -508,7 +514,7 @@ def test_dm_replies_include_settings_link_when_user_must_enter_data():
     ok, text = run(logic.groups_reply(12345))
     assert not ok and SETTINGS in text and "/start" in text
     # połączony user nie dostaje zbędnego linku
-    az2 = FakeAuthentik([tg_user(1, telegram_id=99)])
+    az2 = FakeAuthentik([tg_user(1, telegramVerifiedId=99)])
     assert SETTINGS not in run(TelegramLogic(az2, State(), [], settings_url=SETTINGS).start_reply(99, "x"))[0]
 
 
@@ -563,3 +569,242 @@ def test_commands_in_unlisted_group_are_ignored_silently():
         upd, ctx, sent = _fake_update("supergroup")
         run(handler(upd, ctx))
         assert sent == []  # zero odpowiedzi: bot dodany do losowej grupy nie zdradza, do czego służy
+
+
+# ---------- matrixAccounts ----------
+def test_matrix_accounts_report_state_of_each_handle():
+    st = State(); st.mark_invited("@b:x.y", "!r")
+    az = FakeAuthentik([matrix_user("@a:x.y @b:x.y @c:x.y @d:x.y")])
+    mx = FakeMatrix({("!r", "@a:x.y"): "join", ("!r", "@b:x.y"): "invite", ("!r", "@c:x.y"): "ban"})
+    run(run_matrix_cycle(az, mx, st, ["!r"]))
+    acc = az.users[0]["attributes"]["matrixAccounts"]
+    assert acc["@a:x.y"]["state"] == "joined"
+    assert acc["@b:x.y"]["state"] == "pending" and "czeka na akceptację w: Pokój R" in acc["@b:x.y"]["detail"]
+    assert acc["@c:x.y"]["state"] == "banned"
+    assert acc["@d:x.y"]["state"] == "invited"  # świeżo zaproszony w tym przebiegu
+
+
+def test_matrix_accounts_use_worst_state_across_rooms_and_error_detail():
+    st = State(); st.mark_invited("@a:x.y", "!r2")
+    az, mx = FakeAuthentik([matrix_user("@a:x.y @bad:x.y")]), FakeMatrix(
+        {("!r", "@a:x.y"): "join", ("!r2", "@a:x.y"): "leave"})
+    mx.fail = {"@bad:x.y"}
+    run(run_matrix_cycle(az, mx, st, ["!r", "!r2"]))
+    acc = az.users[0]["attributes"]["matrixAccounts"]
+    assert acc["@a:x.y"]["state"] == "left"           # joined + left => left (gorszy)
+    assert acc["@bad:x.y"]["state"] == "error" and "nie ma takiego usera" in acc["@bad:x.y"]["detail"]
+
+
+def test_one_write_per_user_and_stable_updated_timestamp():
+    st = State()
+    az, mx = FakeAuthentik([matrix_user("@a:x.y")]), FakeMatrix({("!r", "@a:x.y"): "join"})
+    run(run_matrix_cycle(az, mx, st, ["!r"]))
+    assert len(az.writes) == 1                        # status + accounts + lista w jednym zapisie
+    az.users[0]["attributes"]["matrixAccounts"]["@a:x.y"]["updated"] = 111
+    run(run_matrix_cycle(az, mx, st, ["!r"]))
+    assert len(az.writes) == 1                        # nic się nie zmieniło: zero zapisów
+    assert az.users[0]["attributes"]["matrixAccounts"]["@a:x.y"]["updated"] == 111
+
+
+def test_removed_handle_disappears_from_accounts_and_cleared_when_no_handles():
+    st = State()
+    az, mx = FakeAuthentik([matrix_user("@a:x.y @b:x.y")]), FakeMatrix()
+    run(run_matrix_cycle(az, mx, st, ["!r"]))
+    az.users[0]["attributes"]["matrixHandles"] = ["@a:x.y"]
+    run(run_matrix_cycle(az, mx, st, ["!r"]))
+    assert list(az.users[0]["attributes"]["matrixAccounts"]) == ["@a:x.y"]
+    az.users[0]["attributes"]["matrixHandles"] = []
+    run(run_matrix_cycle(az, mx, st, ["!r"]))
+    assert "matrixAccounts" not in az.users[0]["attributes"] and "matrixStatus" not in az.users[0]["attributes"]
+
+
+# ---------- ręczne zaproszenia (kolejka z usermanagera) ----------
+def _req(handle, by="admin1", ts=1000):
+    return {"handle": handle, "by": by, "ts": ts}
+
+
+def test_manual_request_reinvites_despite_earlier_decline_posts_message_and_records_result():
+    st = State(); st.mark_invited("@a:x.y", "!r")
+    user = matrix_user("@a:x.y"); user["attributes"]["matrixInviteRequests"] = [_req("@a:x.y", "kasia")]
+    az, mx = FakeAuthentik([user]), FakeMatrix({("!r", "@a:x.y"): "leave"})
+    stats = run(run_matrix_cycle(az, mx, st, ["!r"]))
+    assert mx.invites == [("!r", "@a:x.y")]                       # mimo „odrzucił" i pamięci
+    assert mx.notices == [("!r", "Dodano @a:x.y na prośbę jan (ręcznie, przez kasia)")]
+    attrs = az.users[0]["attributes"]
+    assert "matrixInviteRequests" not in attrs                    # kolejka oczyszczona
+    res = attrs["matrixInviteResults"]
+    assert len(res) == 1 and res[0]["handle"] == "@a:x.y" and res[0]["by"] == "kasia"
+    assert res[0]["result"].startswith("ok: zaproszono do 1") and res[0]["rooms"] == 1
+    assert stats["manual"] == 1
+
+
+def test_manual_request_for_handle_not_owned_by_user_is_rejected_without_inviting():
+    user = matrix_user("@a:x.y"); user["attributes"]["matrixInviteRequests"] = [_req("@obcy:x.y")]
+    az, mx = FakeAuthentik([user]), FakeMatrix()
+    run(run_matrix_cycle(az, mx, State(), ["!r"]))
+    assert ("!r", "@obcy:x.y") not in mx.invites and ("!r", "@obcy:x.y") not in mx.attempts
+    attrs = az.users[0]["attributes"]
+    assert "matrixInviteRequests" not in attrs
+    assert attrs["matrixInviteResults"][0]["result"] == "error: to konto nie należy do tego usera"
+
+
+def test_manual_request_ignores_failure_backoff():
+    import time
+    st = State(); st.record_failure("@a:x.y", "!r", "502", now=time.time())   # odstęp trwa
+    user = matrix_user("@a:x.y"); user["attributes"]["matrixInviteRequests"] = [_req("@a:x.y")]
+    az, mx = FakeAuthentik([user]), FakeMatrix()
+    run(run_matrix_cycle(az, mx, st, ["!r"]))
+    assert mx.invites == [("!r", "@a:x.y")] and st.failure("@a:x.y", "!r") is None
+
+
+def test_manual_request_on_429_stays_in_queue_and_is_not_reported():
+    user = matrix_user("@a:x.y"); user["attributes"]["matrixInviteRequests"] = [_req("@a:x.y")]
+    az, mx = FakeAuthentik([user]), FakeMatrix()
+    mx.errors["@a:x.y"] = _http_error(429, {"retry_after_ms": 60000})
+    run(run_matrix_cycle(az, mx, State(), ["!r"]))
+    attrs = az.users[0]["attributes"]
+    assert len(attrs["matrixInviteRequests"]) == 1               # czeka na następny przebieg
+    assert "matrixInviteResults" not in attrs
+
+
+def test_manual_request_failure_is_consumed_with_error_result():
+    user = matrix_user("@a:x.y"); user["attributes"]["matrixInviteRequests"] = [_req("@a:x.y")]
+    az, mx = FakeAuthentik([user]), FakeMatrix(); mx.fail = {"@a:x.y"}
+    run(run_matrix_cycle(az, mx, State(), ["!r"]))
+    attrs = az.users[0]["attributes"]
+    assert "matrixInviteRequests" not in attrs and attrs["matrixInviteResults"][0]["result"].startswith("error:")
+
+
+def test_request_added_by_admin_during_cycle_is_not_lost():
+    user = matrix_user("@a:x.y"); user["attributes"]["matrixInviteRequests"] = [_req("@a:x.y", ts=1)]
+    az, mx = FakeAuthentik([user]), FakeMatrix()
+    new_req = _req("@a:x.y", "admin2", ts=2)
+    az.before_write = lambda attrs: attrs["matrixInviteRequests"].append(new_req)  # równoległy zapis admina
+    run(run_matrix_cycle(az, mx, State(), ["!r"]))
+    assert az.users[0]["attributes"]["matrixInviteRequests"] == [new_req]   # przetworzona zniknęła, nowa została
+
+
+def test_manual_results_are_capped_to_last_five():
+    user = matrix_user("@a:x.y")
+    user["attributes"]["matrixInviteResults"] = [{"handle": "@a:x.y", "by": "x", "ts": i, "result": "ok", "rooms": 0} for i in range(5)]
+    user["attributes"]["matrixInviteRequests"] = [_req("@a:x.y", ts=99)]
+    az, mx = FakeAuthentik([user]), FakeMatrix({("!r", "@a:x.y"): "join"})
+    run(run_matrix_cycle(az, mx, State(), ["!r"]))
+    res = az.users[0]["attributes"]["matrixInviteResults"]
+    assert len(res) == 5 and res[-1]["by"] == "admin1" and res[0]["ts"] == 1   # najstarszy wypadł
+
+
+def test_manual_request_in_dry_run_changes_nothing():
+    user = matrix_user("@a:x.y"); user["attributes"]["matrixInviteRequests"] = [_req("@a:x.y")]
+    az, mx = FakeAuthentik([user]), FakeMatrix({("!r", "@a:x.y"): "leave"})
+    run(run_matrix_cycle(az, mx, State(), ["!r"], dry_run=True))
+    assert mx.invites == [] and az.writes == [] and len(az.users[0]["attributes"]["matrixInviteRequests"]) == 1
+
+
+# ---------- migracja atrybutów (snake_case → camelCase) ----------
+from bot.migrate import plan_migration, run_migration  # noqa: E402
+
+
+def _apply(attrs):
+    set_, remove, _ = plan_migration(attrs)
+    out = dict(attrs); out.update(set_)
+    for k in remove:
+        out.pop(k, None)
+    return out
+
+
+def test_migration_merges_handles_renames_and_drops_derived():
+    attrs = {
+        "matrix_handles": ["@a:x.y", "@b:x.y"], "matrixHandles": "@B:x.y\n@c:x.y",
+        "matrix_status": "ok", "matrix_accounts": {}, "telegram_code": "ABC", "telegram_status": "ok",
+        "telegram_username": "@jan_kowalski", "telegram_id": "567621890", "mifareCardId": ["x"],
+    }
+    out = _apply(attrs)
+    assert out["matrixHandles"] == ["@b:x.y", "@c:x.y", "@a:x.y"]        # nowe pierwsze, bez duplikatów
+    assert out["telegramUsername"] == "@jan_kowalski" and out["telegramVerifiedId"] == 567621890
+    assert out["mifareCardId"] == ["x"]                                   # cudzego nie ruszamy
+    assert not [k for k in out if "_" in k]                               # zero starych kluczy snake_case
+
+
+def test_migration_is_idempotent_and_new_values_win_over_old():
+    attrs = {"telegram_username": "@stary_user", "telegramUsername": "@nowy_user", "telegram_id": 5, "telegramVerifiedId": 7}
+    out = _apply(attrs)
+    assert out["telegramUsername"] == "@nowy_user" and out["telegramVerifiedId"] == 7
+    assert plan_migration(out) == ({}, [], [])                            # drugi raz: nic do roboty
+
+
+def test_migration_drops_empty_values_saved_by_settings_flow():
+    out = _apply({"matrixHandles": "", "telegramUsername": "", "telegramCode": "", "foundUsBy": ""})
+    assert out == {"foundUsBy": ""}                                       # puste atrybuty bota znikają, obce zostają
+
+
+def test_migration_run_updates_only_users_that_need_it_and_reports_unknown_keys():
+    az = FakeAuthentik([
+        {"pk": 1, "username": "stary", "attributes": {"matrix_handles": ["@a:x.y"], "dziwnyKlucz": 1}},
+        {"pk": 2, "username": "nowy", "attributes": {"matrixHandles": ["@b:x.y"], "goauthentik.io/user/token-expires": True}},
+    ])
+    summary = run(run_migration(az))
+    assert summary["users"] == 2 and summary["migrated"] == 1
+    assert [w[0] for w in az.writes] == [1]                               # user 2 nietknięty (zero zapisów)
+    assert az.users[0]["attributes"] == {"matrixHandles": ["@a:x.y"], "dziwnyKlucz": 1}
+    assert summary["unknown"] == {"dziwnyKlucz": 1}                       # nieznane tylko zgłoszone, nie usunięte
+
+
+def test_migration_dry_run_writes_nothing():
+    az = FakeAuthentik([{"pk": 1, "username": "stary", "attributes": {"telegram_id": 5}}])
+    summary = run(run_migration(az, dry_run=True))
+    assert summary["migrated"] == 1 and az.writes == [] and az.users[0]["attributes"] == {"telegram_id": 5}
+
+
+def test_real_client_include_inactive_and_mutate_applies_to_fresh_attributes():
+    import json
+    import httpx
+    from bot.authentik import Authentik
+    patched = []
+
+    def handler(req):
+        if req.method == "PATCH":
+            patched.append(json.loads(req.content)); return httpx.Response(200, json={})
+        if req.url.path.endswith("/users/"):
+            return httpx.Response(200, json={"results": [
+                {"pk": 1, "username": "a", "is_active": True}, {"pk": 2, "username": "b", "is_active": False}],
+                "pagination": {"next": 0}})
+        return httpx.Response(200, json={"attributes": {"obce": 1, "matrix_handles": ["@a:x.y"]}})  # świeża wersja
+
+    az = Authentik("https://auth.test", "t", client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    assert [u["pk"] for u in run(az.list_users())] == [1]
+    assert [u["pk"] for u in run(az.list_users(include_inactive=True))] == [1, 2]
+    run(az.update_attributes(1, {"a": 1}, mutate=lambda attrs: attrs.pop("matrix_handles")))
+    assert patched == [{"attributes": {"obce": 1, "a": 1}}]              # scalone ze świeżymi, mutate zastosowane
+
+
+# ---------- Telegram: telegramIDs ----------
+def test_link_adds_verified_id_to_telegram_ids_without_touching_manual_entries():
+    az = FakeAuthentik([tg_user(1, telegramIDs=["111", 222])])
+    ok, _ = run(TelegramLogic(az, State(), []).link(1, 99))
+    attrs = az.users[0]["attributes"]
+    assert ok and attrs["telegramVerifiedId"] == 99
+    assert attrs["telegramIDs"] == ["111", "222", "99"]                  # ręczne zostają (jako stringi), nowe dopisane
+    run(TelegramLogic(az, State(), []).link(1, 99))
+    assert attrs["telegramIDs"].count("99") == 1                          # bez duplikatów
+
+
+def test_link_refuses_id_registered_by_admin_for_another_user():
+    az = FakeAuthentik([tg_user(1, telegramIDs=["99"]), tg_user(2)])
+    ok, text = run(TelegramLogic(az, State(), []).link(2, 99))
+    assert not ok and "telegramVerifiedId" not in az.users[1]["attributes"] and "innym" in text
+
+
+def test_poll_backfills_verified_id_missing_from_telegram_ids():
+    az = FakeAuthentik([tg_user(1, telegramVerifiedId=99), tg_user(2, telegramVerifiedId=5, telegramIDs=["5"])])
+    run(TelegramLogic(az, State(), []).poll_codes())
+    assert az.users[0]["attributes"]["telegramIDs"] == ["99"]
+    assert [w[0] for w in az.writes] == [1]                               # user 2 już kompletny: zero zapisów
+
+
+def test_admin_registered_telegram_id_counts_as_linked_for_start_and_groups():
+    az = FakeAuthentik([tg_user(1, telegramIDs=["99"])])
+    logic = TelegramLogic(az, State(), [-1])
+    assert "już połączone" in run(logic.start_reply(99, "x"))[0]
+    assert run(logic.groups_reply(99)) == (True, "")
+    assert run(logic.groups_reply(12345))[0] is False

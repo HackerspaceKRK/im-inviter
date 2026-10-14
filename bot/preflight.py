@@ -57,7 +57,7 @@ async def check_authentik(c: httpx.AsyncClient) -> bool:
                   f"{slug} → Stage Bindings (ma być prompt order 20 i user write order 100)")
         return ok
     fields = [f.get("field_key") for f in (body.get("fields") or [])]
-    wanted = ["attributes.matrix_handles", "attributes.telegram_username", "attributes.telegram_code"]
+    wanted = ["attributes.matrixHandles", "attributes.telegramUsername", "attributes.telegramCode"]
     missing = [w for w in wanted if w not in fields]
     ok &= say(not missing, f"Authentik: pola IM widoczne w ustawieniach usera (flow {slug})",
               "brak: " + ", ".join(missing) + " — zaaplikuj blueprint (Admin → Customization → Blueprints) "
