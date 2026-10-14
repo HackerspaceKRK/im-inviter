@@ -29,7 +29,8 @@ async def amain(dry_run: bool, once: bool) -> None:
     notify_room = os.environ.get("MATRIX_NOTIFY_ROOM", "").strip() or None
     pending_after = float(os.environ.get("MATRIX_PENDING_AFTER_HOURS", "24"))
     matrix = (
-        Matrix(os.environ["MATRIX_HOMESERVER"], os.environ["MATRIX_TOKEN"])
+        Matrix(os.environ["MATRIX_HOMESERVER"], os.environ["MATRIX_TOKEN"],
+               msgtype=os.environ.get("MATRIX_MSGTYPE", "m.text").strip() or "m.text")
         if rooms or spaces else None
     )
 

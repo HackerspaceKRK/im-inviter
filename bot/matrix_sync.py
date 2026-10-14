@@ -16,7 +16,11 @@ log = logging.getLogger("matrix")
 
 
 class Matrix:
-    def __init__(self, homeserver: str, token: str, client: Optional[httpx.AsyncClient] = None):
+    def __init__(self, homeserver: str, token: str, client: Optional[httpx.AsyncClient] = None,
+                 msgtype: str = "m.text"):
+        # m.text: zwykła wiadomość, mosty (mautrix → Telegram) ją przekazują, ale klienty powiadamiają.
+        # m.notice: „bot", cichy, ale mosty domyślnie go pomijają.
+        self.msgtype = msgtype
         self.base = homeserver.rstrip("/") + "/_matrix/client/v3"
         self.client = client or httpx.AsyncClient(
             headers={"Authorization": f"Bearer {token}"}, timeout=20
@@ -61,7 +65,7 @@ class Matrix:
 
     async def notice(self, room: str, text: str, html: Optional[str] = None) -> None:
         room = await self.rid(room)
-        content: Dict[str, Any] = {"msgtype": "m.notice", "body": text}
+        content: Dict[str, Any] = {"msgtype": self.msgtype, "body": text}
         if html:
             content.update({"format": "org.matrix.custom.html", "formatted_body": html})
         r = await self.client.put(

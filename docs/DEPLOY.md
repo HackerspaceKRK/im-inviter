@@ -84,6 +84,12 @@ więc konto serwisowe bez maila nie przejdzie go przez API — to ograniczenie k
 4. ID pokoju (`!abc:serwer`): Element → Ustawienia pokoju → Zaawansowane → „Wewnętrzne ID pokoju".
    Pokoje **niezaszyfrowane** (inaczej zaproszenia działają, ale wiadomość „Dodano…" nie).
 
+### Typ wiadomości „Dodano …" (mosty)
+
+Domyślnie `MATRIX_MSGTYPE=m.text`. Mosty mautrix **nie przekazują** `m.notice` (typ „bot"), więc wiadomość nie
+dotarłaby np. na Telegram; `m.text` jest przekazywany, ale klienty Matrixa **powiadamiają** o nim (w `#hskrk` to głośniej).
+Cichy wariant: `MATRIX_MSGTYPE=m.notice` plus wyjątek dla konta bota w configu mostu (`bridge_notices` / `exceptions`).
+
 ### Przestrzenie (Spaces) Matrix
 
 Bot może zapraszać do **przestrzeni** zamiast (albo obok) pojedynczych pokoi: `MATRIX_SPACES=!id:serwer`.

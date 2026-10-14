@@ -397,3 +397,22 @@ def test_not_in_room_error_has_actionable_message():
     req = httpx.Request("POST", "https://x")
     resp = httpx.Response(403, json={"errcode": "M_FORBIDDEN", "error": "User @b:x not in room !r:y, and room previews are disabled"}, request=req)
     assert "bot nie jest w tym pokoju" in _err(httpx.HTTPStatusError("e", request=req, response=resp))
+
+
+def test_message_type_is_configurable_and_defaults_to_m_text():
+    import json
+    import httpx
+    from bot.matrix_sync import Matrix
+    sent = []
+
+    def handler(req):
+        sent.append(json.loads(req.content))
+        return httpx.Response(200, json={"event_id": "$e"})
+
+    def mk(**kw):
+        return Matrix("https://hs.test", "t", client=httpx.AsyncClient(transport=httpx.MockTransport(handler)), **kw)
+
+    run(mk().notice("!r:x.y", "Dodano @a:x.y na prośbę jan", "<b>x</b>"))
+    run(mk(msgtype="m.notice").notice("!r:x.y", "cicho"))
+    assert sent[0]["msgtype"] == "m.text" and sent[0]["format"] == "org.matrix.custom.html"
+    assert sent[1]["msgtype"] == "m.notice"
