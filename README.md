@@ -56,7 +56,8 @@ Grupy: bot **nie może** dodać usera do grupy po id (ograniczenie API). Wysyła
    **niezaszyfrowane** (bot nie robi E2EE). ID pokoju: Element → Room settings → Advanced.
 4. **Telegram** (opcjonalnie): `@BotFather` → `/newbot`; dodaj bota jako admina do grup; ID grupy
    (`-100…`) zdobędziesz np. przez `@RawDataBot`.
-5. `cp .env.example .env`, uzupełnij, `docker compose up -d --build`.
+5. `cp .env.example .env` i `cp docker-compose.example.yml docker-compose.yml`, uzupełnij `.env`, potem
+   `docker compose up -d --build`. Własny `docker-compose.yml` jest ignorowany przez git (nie koliduje z `git pull`).
 
 Test na sucho (loguje, nic nie wysyła i nie zapisuje; Telegram wyłączony):
 
@@ -69,7 +70,7 @@ docker compose run --rm bot python -m bot.main --dry-run --once
 GitHub Actions (`.github/workflows/docker.yml`) po każdym pushu na `main` uruchamia testy i buduje obraz
 `linux/amd64` + `linux/arm64`, publikowany w GHCR: `ghcr.io/hackerspacekrk/im-inviter`
 (tagi: `latest`, `main`, `sha-<commit>`, a po tagu `vX.Y.Z` także `X.Y.Z` i `X.Y`). Pull requesty tylko budują obraz.
-Wdrożenie z gotowego obrazu: `docker compose pull && docker compose up -d` (`docker-compose.yml` ma `image:` z fallbackiem
+Wdrożenie z gotowego obrazu: `docker compose pull && docker compose up -d` (`docker-compose.example.yml` ma `image:` z fallbackiem
 `build: .`). Jeśli pierwszy `pull` zwróci „denied", pakiet jest prywatny — ustaw widoczność w Packages → Package settings.
 
 ## Testy

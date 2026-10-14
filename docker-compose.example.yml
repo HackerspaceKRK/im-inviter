@@ -1,0 +1,26 @@
+# SZABLON — nie edytuj tego pliku na serwerze (git pull go aktualizuje).
+# Skopiuj do docker-compose.yml (ignorowany przez git) i dopasuj do swojego hosta:
+#
+#   cp docker-compose.example.yml docker-compose.yml
+#
+# Własny docker-compose.yml nie koliduje z `git pull`. Gdy szablon się zmieni, zobacz różnice:
+#   diff docker-compose.example.yml docker-compose.yml
+
+services:
+  bot:
+    # Gotowy obraz z GHCR (docker compose pull) ...
+    image: ghcr.io/hackerspacekrk/im-inviter:latest
+    # ... albo budowanie z kodu na miejscu (docker compose up -d --build). Zostaw obie linie albo usuń
+    # tę, której nie używasz; na produkcji przypnij tag wersji zamiast :latest.
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      # Named volume (domyślnie): Docker sam nadaje właściwe uprawnienia.
+      - bot-data:/data
+      # Zamiast niego bind mount (np. żeby mieć stan na dysku hosta). UWAGA: katalog musi być zapisywalny
+      # dla uid 10001 (użytkownik `bot` w obrazie): mkdir -p dane && sudo chown -R 10001:10001 dane
+      # - ./dane:/data
+
+volumes:
+  bot-data:

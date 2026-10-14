@@ -122,6 +122,7 @@ Bot może zapraszać do **przestrzeni** zamiast (albo obok) pojedynczych pokoi: 
 sudo mkdir -p /opt/im-sync-hskrk && sudo chown "$USER" /opt/im-sync-hskrk   # dla hswro: im-sync-hswro
 git clone <URL-repo> /opt/im-sync-hskrk && cd /opt/im-sync-hskrk
 cp env/hskrk.env.example .env && chmod 600 .env && "$EDITOR" .env
+cp docker-compose.example.yml docker-compose.yml && "$EDITOR" docker-compose.yml   # lokalna kopia, ignorowana przez git
 
 # Zbuduj obraz i sprawdź całą układankę zanim cokolwiek zacznie działać:
 docker compose build
@@ -132,6 +133,23 @@ docker compose run --rm bot python -m bot.main --dry-run --once
 
 # Na ostro:
 docker compose up -d && docker compose logs -f --tail=50
+```
+
+**Własny `docker-compose.yml`:** w repo jest tylko szablon `docker-compose.example.yml`, a Twoja kopia
+(`docker-compose.yml`) jest w `.gitignore`, więc `git pull` jej nie rusza i nie zgłasza konfliktów. Po aktualizacji
+sprawdź, czy szablon się zmienił: `diff docker-compose.example.yml docker-compose.yml`.
+
+**Aktualizacja** (kod z gita, obraz budowany na miejscu): `git pull && docker compose up -d --build`
+(albo z gotowego obrazu: `docker compose pull && docker compose up -d`).
+
+**Jednorazowa migracja** na hoście, który już miał śledzony `docker-compose.yml` ze zmianami lokalnymi
+(inaczej `git pull` zgłosi „local changes would be overwritten"):
+```bash
+cp docker-compose.yml ~/docker-compose.local.yml     # zabezpiecz swoją wersję
+git checkout -- docker-compose.yml                   # porzuć lokalne zmiany w śledzonym pliku
+git pull                                             # plik znika z repo, pojawia się docker-compose.example.yml
+cp ~/docker-compose.local.yml docker-compose.yml     # przywróć swoją wersję (teraz nieśledzona)
+git status --short                                   # ma być czysto
 ```
 
 **Bind mount zamiast named volume:** katalog danych musi być zapisywalny dla uid 10001 (użytkownik `bot` w obrazie):
