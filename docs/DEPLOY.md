@@ -196,6 +196,27 @@ Kolejność wdrożenia na instancji z istniejącymi danymi:
 4. **Sprawdź** `docker compose logs --tail=50 bot`: `migracja: userów N, zmieniono M` i brak ostrzeżeń o nieznanych atrybutach
    (albo ich lista do ręcznego przejrzenia).
 
+## Spójność z Authentikiem (nadpisane atrybuty)
+
+Źródłem prawdy jest Authentik, a SQLite (`state.db`) to tylko pamięć bota. Znany problem: narzędzie, które zapisuje usera
+i **podmienia cały obiekt atrybutów** (stary `usermanager`), kasuje wszystko, co zapisał bot, a pamięć bota zostaje.
+Bot sprawdza to w każdym przebiegu:
+
+- **Pamięć o handle'ach, których nikt już nie ma wpisanych**, jest kasowana (jak dotąd). Dodatkowo kasowana jest pamięć
+  o pokojach spoza konfiguracji i o userach, których nie ma już w Authentiku.
+- **Wykrywanie nadpisania:** bot zapamiętuje, że zapisał `matrixAccounts` dla usera. Jeśli ich w Authentiku nie ma, a bot
+  wcześniej je zapisał, znaczy to, że ktoś je nadpisał (świadome usunięcie handle'i zostawia `matrixAccounts` do czasu
+  sprzątnięcia przez bota, więc nie jest brane za nadpisanie). Wtedy bot: loguje ostrzeżenie `spójność: user … stracił
+  atrybuty bota`, **czyści pamięć o jego kontach** (konta, których nie ma w pokojach, dostaną zaproszenia ponownie, bo stan
+  liczy się od nowa wg prawdziwego członkostwa w Matrixie) i zostawia userowi atrybut `imInviterNote` z opisem, co się stało i
+  co sprawdzić. `--dry-run` tylko loguje.
+- **Telegram nie ma stanu w SQLite**: „połączone" znaczy tyle, że ID jest na liście `telegramIDs` (to pole zachowuje się po
+  zapisie w `usermanager`, bo jest w jego formularzu). Jeśli user z takim ID wpisze ponownie swój `telegramUsername` w
+  ustawieniach i wyśle `/start`, bot prosi o **ponowne potwierdzenie** (idempotentne, ID nie dubluje się, wniosek się zamyka).
+  Wniosek innego usera o to samo ID bot odrzuca.
+- Po aktualizacji bota na instancji z istniejącymi danymi nie ma fałszywych alarmów: bot zaczyna wykrywać nadpisanie dopiero
+  dla userów, którym sam zapisał stan.
+
 ## Odrzucone zaproszenia i ponowne zapraszanie
 
 - **Odrzucone zaproszenie wygląda w Matrixie jak wyjście z pokoju (`leave`).** Bot go nie ponawia (inaczej zapraszałby

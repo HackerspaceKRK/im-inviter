@@ -140,6 +140,16 @@ def _req_key(req: Dict[str, Any]) -> tuple:
     return (req["handle"], req["by"], req["ts"])
 
 
+def inconsistency_note(handles) -> str:
+    """Komentarz zostawiany userowi w atrybucie `imInviterNote`, gdy bot wykryje nadpisanie swoich atrybutów."""
+    when = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
+    which = ", ".join(sorted(set(handles))) or "(brak)"
+    return (f"{when}: wykryto niespójność. Atrybuty bota (matrixAccounts itd.) zniknęły z Authentika, mimo że bot je "
+            f"wcześniej zapisał; prawdopodobnie nadpisało je inne narzędzie (np. zapis usera w usermanagerze, który podmienia "
+            f"cały obiekt atrybutów). Bot wyczyścił swoją pamięć o kontach Matrix: {which} i policzył stan od nowa "
+            f"(konta spoza pokoi dostaną zaproszenia ponownie). Sprawdź, czy telegramUsername/matrixHandles są nadal wpisane.")
+
+
 def aggregate_account(entries: List[Tuple[str, str]]) -> Tuple[str, str]:
     """[(stan, szczegóły)] → (najgorszy stan, szczegóły wpisów o tym stanie, bez powtórzeń)."""
     if not entries:
@@ -279,20 +289,50 @@ async def run_matrix_cycle(
             log.warning("zaproszono %s do %s, ale wiadomość „Dodano” się nie wysłała: %s", handle, room, _err(e))
         return "invited", "", "invited", False
 
-    for user in await authentik.list_users():
+    all_users = await authentik.list_users()
+    if not dry_run:
+        # Authentik jest źródłem prawdy: pamięć o pokojach spoza konfiguracji i o userach, których nie ma, jest zbędna.
+        dropped = state.drop_unconfigured_rooms([r for r, _ in targets])
+        pruned = state.prune_written([u["pk"] for u in all_users])
+        if dropped or pruned:
+            log.info("spójność: usunięto %d wpisów o pokojach spoza konfiguracji i %d znaczników nieistniejących userów",
+                     dropped, pruned)
+
+    for user in all_users:
         attrs = user.get("attributes") or {}
         raw = attrs.get("matrixHandles")
         requests = parse_requests(attrs.get("matrixInviteRequests"))
         username = user["username"]
+        # Czy ktoś nadpisał atrybuty bota? Bot pamięta, że zapisał matrixAccounts dla tego usera, a w Authentiku
+        # ich nie ma. (Świadome usunięcie wszystkich handle'i zostawia matrixAccounts do czasu sprzątnięcia przez bota.)
+        written = state.written_handles(user["pk"])
+        wiped = written is not None and not attrs.get("matrixAccounts")
         if not raw and not requests:
             # Brak handle'i: nie zostawiamy starego statusu/stanów kont.
+            if not dry_run and written is not None:
+                if wiped:
+                    log.warning("spójność: user %s stracił atrybuty bota (handle'e %s); czyszczę pamięć i zostawiam notatkę",
+                                username, ", ".join(written) or "-")
+                    state.forget_handles(written)
+                    state.forget_user(user["pk"])
+                    await authentik.update_attributes(user["pk"], {"imInviterNote": inconsistency_note(written)})
+                else:
+                    state.forget_user(user["pk"])  # świadome usunięcie handle'i: forget_missing posprząta resztę
             if not dry_run and (attrs.get("matrixStatus") or attrs.get("matrixAccounts")):
                 await authentik.update_attributes(user["pk"], remove=["matrixStatus", "matrixAccounts"])
             continue
         handles, invalid = normalize_matrix_handles(raw)
         current.update(handles)
-        msgs: List[str] = [f"niepoprawny handle: {h}" for h in invalid]
         updates: Dict[str, Any] = {}
+        if wiped:
+            log.warning("spójność: user %s stracił atrybuty bota (handle'e %s); czyszczę pamięć i liczę stan od nowa",
+                        username, ", ".join(sorted(set(written) | set(handles))) or "-")
+            if not dry_run:
+                lost = set(written) | set(handles)
+                state.forget_handles(lost)  # zaproszenia liczone od nowa wg PRAWDZIWEGO stanu w Matrixie
+                state.forget_user(user["pk"])
+                updates["imInviterNote"] = inconsistency_note(lost)
+        msgs: List[str] = [f"niepoprawny handle: {h}" for h in invalid]
 
         # Użytkownik wpisuje textarea (string) — innym aplikacjom oddajemy porządną listę.
         if raw and raw != handles and not dry_run:
@@ -394,6 +434,8 @@ async def run_matrix_cycle(
                     fresh.pop("matrixInviteRequests", None)
 
             await authentik.update_attributes(user["pk"], updates, mutate=drop_consumed)
+        if not dry_run and new_accounts:
+            state.record_written(user["pk"], new_accounts)  # od teraz brak matrixAccounts w Authentiku = ktoś je nadpisał
 
     # Handle usunięty z Authentika = zapomnij o nim (skasuj i dopisz z powrotem → ponowne zaproszenie).
     # Dopiero po całej pętli, więc nie dotyczy przebiegu, który się wysypał w połowie.

@@ -82,10 +82,24 @@ class TelegramLogic:
         """Zwraca (tekst, pk usera do potwierdzenia albo None)."""
         users = await self.authentik.list_users()
         linked = find_linked_user(users, tg_id)
+        matches = find_pending_tg_users(users, tg_username) if tg_username else []
         if linked:
-            return f"To konto Telegram jest już połączone z kontem Authentik „{linked['username']}”.", None
+            # „Połączone" znaczy tylko tyle, że ID jest na liście `telegramIDs` (bot nie trzyma tego nigdzie indziej).
+            # Jeśli user sam wpisał swój @username w ustawieniach (np. po tym, jak inne narzędzie skasowało mu atrybuty
+            # bota), to prośba o ponowne potwierdzenie: dopisanie ID jest idempotentne, a wniosek zostaje zamknięty.
+            if len(matches) == 1 and matches[0]["pk"] == linked["pk"]:
+                return (
+                    f"Konto Authentik „{linked['username']}” prosi o ponowne potwierdzenie połączenia z tym kontem "
+                    f"Telegram (@{tg_username}). To Ty?",
+                    linked["pk"],
+                )
+            return (
+                f"To konto Telegram jest już połączone z kontem Authentik „{linked['username']}” (jego ID jest na liście "
+                "telegramIDs tego konta). Żeby potwierdzić połączenie ponownie, wpisz swój @username w ustawieniach "
+                "Authentika i wyślij mi /start jeszcze raz." + self._settings_line(),
+                None,
+            )
         if tg_username:
-            matches = find_pending_tg_users(users, tg_username)
             if len(matches) == 1:
                 u = matches[0]
                 return (

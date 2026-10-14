@@ -518,9 +518,10 @@ def test_dm_replies_include_settings_link_when_user_must_enter_data():
     assert pk is None and SETTINGS in text
     ok, text = run(logic.groups_reply(12345))
     assert not ok and SETTINGS in text and "/start" in text
-    # połączony user nie dostaje zbędnego linku
+    # połączony user też dostaje link: komunikat tłumaczy, jak potwierdzić połączenie ponownie
     az2 = FakeAuthentik([tg_user(1, telegramIDs=["99"])])
-    assert SETTINGS not in run(TelegramLogic(az2, State(), [], settings_url=SETTINGS).start_reply(99, "x"))[0]
+    linked_text = run(TelegramLogic(az2, State(), [], settings_url=SETTINGS).start_reply(99, "x"))[0]
+    assert SETTINGS in linked_text and "już połączone" in linked_text
 
 
 def _fake_update(chat_type):
@@ -916,3 +917,91 @@ def test_migration_reports_which_invalid_matrix_handles_were_dropped():
     assert "1 kont" in text and "odrzucono niepoprawne wpisy: zly, literowka" in text
     _, _, notes = plan_migration({"matrix_handles": ""})
     assert "0 kont po scaleniu)" in " ".join(notes)                         # pusta wartość: bez wzmianki o odrzuconych
+
+
+# ---------- spójność z Authentikiem: nadpisane atrybuty bota ----------
+def _wipe_bot_attrs(user, keep=("matrixHandles",)):
+    """Symuluje zapis w usermanagerze: podmiana CAŁYCH atrybutów na te z formularza (reszta znika)."""
+    user["attributes"] = {k: v for k, v in user["attributes"].items() if k in keep or k in ("telegramIDs", "mifareCardId")}
+
+
+def test_wipe_with_handle_still_present_resets_memory_leaves_note_and_reinvites():
+    st = State()
+    user = matrix_user("@a:x.y")
+    az, mx = FakeAuthentik([user]), FakeMatrix()
+    run(run_matrix_cycle(az, mx, st, ["!r"]))                          # zaproszony, bot zapisał matrixAccounts
+    assert st.was_invited("@a:x.y", "!r") and st.written_handles(7) == ["@a:x.y"]
+    mx.members.clear()                                                  # a po stronie Matrixa konto nie jest w pokoju
+    _wipe_bot_attrs(user)                                               # ktoś nadpisał atrybuty (handle zostaje)
+    run(run_matrix_cycle(az, mx, st, ["!r"]))
+    attrs = az.users[0]["attributes"]
+    assert "wykryto niespójność" in attrs["imInviterNote"] and "@a:x.y" in attrs["imInviterNote"]
+    assert len(mx.invites) == 2                                         # pamięć wyczyszczona => zaproszony ponownie
+    assert "matrixAccounts" in attrs and st.written_handles(7) == ["@a:x.y"]   # stan policzony od nowa i znów zapisany
+
+
+def test_wipe_that_also_removed_the_handle_clears_sqlite_and_leaves_note():
+    st = State()
+    user = matrix_user("@a:x.y")
+    az, mx = FakeAuthentik([user]), FakeMatrix()
+    run(run_matrix_cycle(az, mx, st, ["!r"]))
+    assert st.was_invited("@a:x.y", "!r")
+    user["attributes"] = {"telegramIDs": ["5"]}                         # usermanager: zniknęło WSZYSTKO botowe, w tym handle
+    run(run_matrix_cycle(az, mx, st, ["!r"]))
+    assert not st.was_invited("@a:x.y", "!r")                           # „nie mam wpisanego usera => nie ma go w SQLite"
+    assert st.written_handles(7) is None
+    note = az.users[0]["attributes"]["imInviterNote"]
+    assert "wykryto niespójność" in note and "@a:x.y" in note
+    assert az.users[0]["attributes"]["telegramIDs"] == ["5"]            # cudzych danych nie ruszamy
+
+
+def test_deliberate_removal_of_all_handles_is_not_reported_as_inconsistency():
+    st = State()
+    user = matrix_user("@a:x.y")
+    az, mx = FakeAuthentik([user]), FakeMatrix()
+    run(run_matrix_cycle(az, mx, st, ["!r"]))
+    user["attributes"]["matrixHandles"] = []                            # user usuwa konto w ustawieniach (matrixAccounts zostaje)
+    run(run_matrix_cycle(az, mx, st, ["!r"]))
+    attrs = az.users[0]["attributes"]
+    assert "imInviterNote" not in attrs and "matrixAccounts" not in attrs and "matrixStatus" not in attrs
+    assert st.written_handles(7) is None and not st.was_invited("@a:x.y", "!r")
+
+
+def test_no_false_alarm_for_instance_that_never_wrote_state_and_in_dry_run():
+    user = matrix_user("@a:x.y")                                        # brak znacznika 'written' (np. świeżo po aktualizacji bota)
+    az, mx = FakeAuthentik([user]), FakeMatrix({("!r", "@a:x.y"): "join"})
+    run(run_matrix_cycle(az, mx, State(), ["!r"]))
+    assert "imInviterNote" not in az.users[0]["attributes"]
+    st = State(); st.record_written(7, ["@a:x.y"]); st.mark_invited("@a:x.y", "!r")
+    wiped = FakeAuthentik([matrix_user("@a:x.y")])                      # zapisany wcześniej, teraz bez matrixAccounts
+    run(run_matrix_cycle(wiped, FakeMatrix(), st, ["!r"], dry_run=True))
+    assert wiped.writes == [] and st.was_invited("@a:x.y", "!r") and st.written_handles(7) == ["@a:x.y"]   # dry-run: zero zmian
+
+
+def test_sqlite_forgets_rooms_not_in_config_and_users_that_no_longer_exist():
+    st = State()
+    st.mark_invited("@a:x.y", "!stary"); st.mark_invited("@a:x.y", "!r"); st.record_failure("@a:x.y", "!stary", "e")
+    st.record_written(99, ["@z:x.y"])                                   # user 99 nie istnieje już w Authentiku
+    az, mx = FakeAuthentik([matrix_user("@a:x.y")]), FakeMatrix({("!r", "@a:x.y"): "join"})
+    run(run_matrix_cycle(az, mx, st, ["!r"]))
+    assert not st.was_invited("@a:x.y", "!stary") and st.was_invited("@a:x.y", "!r")
+    assert st.failure("@a:x.y", "!stary") is None and st.written_handles(99) is None
+    assert State().drop_unconfigured_rooms([]) == 0                     # brak konfiguracji: nic nie kasujemy
+
+
+# ---------- Telegram: ponowne potwierdzenie po utracie atrybutów ----------
+def test_already_linked_user_who_requested_again_can_confirm_again_idempotently():
+    az = FakeAuthentik([tg_user(1, telegramIDs=["99"], telegramUsername="@Jan_Kowalski")])
+    logic = TelegramLogic(az, State(), [])
+    text, pk = run(logic.start_reply(99, "jan_kowalski"))
+    assert pk == 1 and "ponowne potwierdzenie" in text                  # zamiast ślepego „już połączone"
+    ok, _ = run(logic.link(1, 99, tg_username="jan_kowalski"))
+    attrs = az.users[0]["attributes"]
+    assert ok and attrs["telegramIDs"] == ["99"] and "telegramUsername" not in attrs   # bez duplikatu, wniosek zamknięty
+
+
+def test_already_linked_without_own_request_or_with_request_of_another_user_stays_a_refusal():
+    az = FakeAuthentik([tg_user(1, telegramIDs=["99"]), tg_user(2, telegramUsername="@jan_kowalski")])
+    logic = TelegramLogic(az, State(), [], settings_url=SETTINGS)
+    text, pk = run(logic.start_reply(99, "jan_kowalski"))               # wniosek złożył INNY user: nie przejmujemy cudzego ID
+    assert pk is None and "już połączone" in text and "telegramIDs" in text and SETTINGS in text
