@@ -117,7 +117,7 @@ entries:
       required: false
       order: 111
       placeholder: "@jan_kowalski"
-      sub_text: Potem napisz /start do bota na Telegramie, żeby potwierdzić.
+      sub_text: Potem napisz /start do bota @members_hskrk_bot na Telegramie, żeby potwierdzić.
       initial_value_expression: true
       initial_value: |
         try:
@@ -134,7 +134,7 @@ entries:
       type: text
       required: false
       order: 112
-      sub_text: Kod dostajesz od bota po /start, ważny 15 minut.
+      sub_text: Kod dostajesz od bota @members_hskrk_bot po /start, ważny 15 minut.
 
   - model: authentik_stages_prompt.promptstage
     id: s-prompt
