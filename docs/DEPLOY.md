@@ -128,6 +128,9 @@ docker compose run --rm bot python -m bot.main --dry-run --once
 docker compose up -d && docker compose logs -f --tail=50
 ```
 
+**Bind mount zamiast named volume:** katalog danych musi być zapisywalny dla uid 10001 (użytkownik `bot` w obrazie):
+`mkdir -p dane && sudo chown -R 10001:10001 dane`. Inaczej bot kończy z `unable to open database file`.
+
 Katalogi `/opt/im-sync-hskrk` i `/opt/im-sync-hswro` są niezależne (osobny volume `bot-data`
 z SQLite, osobna nazwa projektu compose wynika z nazwy katalogu).
 
@@ -181,6 +184,7 @@ Utrata stanu (SQLite) = bot może ponownie zaprosić osoby, które świadomie wy
 | Brak „Dodano…" w pokoju mimo invite | Pokój zaszyfrowany | Wyłącz szyfrowanie albo zaakceptuj brak wiadomości |
 | Telegram: brak linków do grup | Bot nie jest adminem z „Invite users" | `preflight` wskaże grupę |
 | Pola nie pojawiają się w ustawieniach | Blueprint nie zaaplikowany | Admin → Blueprints → status; ręczny wariant z kroku 2 |
+| `sqlite3.OperationalError: unable to open database file` (kontener w pętli restartów) | Katalog danych z **bind mount** (`./dane:/data`) założył Docker jako `root`, a bot działa jako uid **10001** | `sudo chown -R 10001:10001 ./dane` albo `user: "UID:GID"` w compose; named volume (`bot-data`, domyślny compose) nie ma tego problemu |
 
 ## Notatki z wdrożeń
 
