@@ -1,5 +1,4 @@
 import asyncio
-import pytest
 
 from bot.handles import (
     pending_age_label,
@@ -1104,85 +1103,37 @@ def test_manual_request_ownership_check_is_case_sensitive():
     assert az.users[0]["attributes"]["matrixInviteResults"][0]["result"] == "error: to konto nie należy do tego usera"
 
 
-# ---------- osiągalność kont Telegrama (bot nie może napisać pierwszy) ----------
-class ReachBot(FakeTgBot):
-    """get_chat działa tylko dla kont, które kiedyś napisały do bota; inne: „chat not found” (jak w Telegramie)."""
-    def __init__(self, reachable=(), network_error=()):
-        super().__init__()
-        self.reachable, self.network_error, self.probed = {int(x) for x in reachable}, {int(x) for x in network_error}, []
-
-    async def get_chat(self, chat):
-        self.probed.append(chat)
-        if chat in self.network_error:
-            raise RuntimeError("Timed out")
-        if chat not in self.reachable:
-            raise RuntimeError("Bad Request: chat not found")
-        from types import SimpleNamespace
-        return SimpleNamespace(title=None)
+# ---------- ślad kontaktu z botem (bot nie może napisać pierwszy) ----------
+def test_contact_with_the_bot_is_recorded_for_the_owner_of_the_id():
+    az = FakeAuthentik([tg_user(1, telegramIDs=["99", "100"]), tg_user(2, telegramIDs=["5"])])
+    logic = TelegramLogic(az, State(), [], None)
+    run(logic.note_contact(99))
+    assert az.users[0]["attributes"]["telegramReachableIDs"] == ["99"]          # tylko to konto, nie "100"
+    assert "telegramReachableIDs" not in az.users[1]["attributes"]
+    run(logic.note_contact(100))
+    run(logic.note_contact(100))                                                  # idempotentne
+    assert az.users[0]["attributes"]["telegramReachableIDs"] == ["99", "100"]
+    run(logic.note_contact(12345))                                                # ID nieprzypisane nikomu: nic się nie dzieje
+    assert "telegramReachableIDs" not in az.users[1]["attributes"]
 
 
-def test_reachability_is_probed_silently_and_published_for_each_user():
-    bot = ReachBot(reachable=[1])
-    az = FakeAuthentik([tg_user(1, telegramIDs=["1", "2"]), tg_user(2, telegramIDs=["3"]), tg_user(3)])
-    st = State()
-    assert run(TelegramLogic(az, st, [], bot).refresh_reachability()) == 3
-    assert az.users[0]["attributes"]["telegramReachableIDs"] == ["1"]          # 2 nigdy nie napisało do bota
-    assert az.users[1]["attributes"]["telegramReachableIDs"] == []              # znane, ale nieosiągalne: lista pusta (nie brak)
-    assert "telegramReachableIDs" not in az.users[2]["attributes"]
-    assert bot.sent == []                                                       # sonda niczego nie wysyła do użytkowników
-
-
-def test_reachability_published_only_when_all_of_the_users_accounts_are_known_and_only_on_change():
-    bot = ReachBot(reachable=[1])
-    az = FakeAuthentik([tg_user(1, telegramIDs=["1", "2", "3"])])
-    st = State()
-    logic = TelegramLogic(az, st, [], bot)
-    run(logic.refresh_reachability(budget=2))                                    # sprawdzono tylko 2 z 3 kont
-    assert "telegramReachableIDs" not in az.users[0]["attributes"]              # niekompletne: nie publikujemy (UI nie może zgadywać)
-    run(logic.refresh_reachability(budget=2))
-    assert az.users[0]["attributes"]["telegramReachableIDs"] == ["1"]
-    writes = len(az.writes)
-    run(logic.refresh_reachability())
-    assert len(az.writes) == writes                                              # bez zmian: zero zapisów
-
-
-def test_unreachable_accounts_are_rechecked_after_a_while_and_reachable_ones_never():
-    import time
-    bot = ReachBot()
-    az = FakeAuthentik([tg_user(1, telegramIDs=["5"])])
-    st = State()
-    logic = TelegramLogic(az, st, [], bot)
-    run(logic.refresh_reachability()); run(logic.refresh_reachability())
-    assert bot.probed == [5]                                                     # drugi przebieg nie pyta ponownie
-    st.db.execute("UPDATE tg_reach SET checked=?", (int(time.time()) - 7 * 3600,)); st.db.commit()
-    bot.reachable.add(5)                                                         # w międzyczasie napisało do bota
-    run(logic.refresh_reachability())
-    assert bot.probed == [5, 5] and az.users[0]["attributes"]["telegramReachableIDs"] == ["5"]
-    run(logic.refresh_reachability())
-    assert bot.probed == [5, 5]                                                  # osiągalne zostaje osiągalne bez sprawdzania
-
-
-def test_network_error_does_not_mark_an_account_unreachable():
-    bot = ReachBot(network_error=[7])
-    az = FakeAuthentik([tg_user(1, telegramIDs=["7"])])
-    st = State()
-    run(TelegramLogic(az, st, [], bot).refresh_reachability())
-    assert st.reach(7) is None and "telegramReachableIDs" not in az.users[0]["attributes"]   # nic nie wnioskujemy z timeoutu
-
-
-def test_account_that_messages_the_bot_is_marked_reachable_and_stale_attribute_is_removed():
-    st = State()
-    logic = TelegramLogic(FakeAuthentik([tg_user(1, telegramIDs=["99"])]), st, [-1])
+def test_handlers_record_contact_for_manually_entered_ids():
+    az = FakeAuthentik([tg_user(1, telegramIDs=["99"])])                          # ID wpisane ręcznie przez admina
+    logic = TelegramLogic(az, State(), [], FakeTgBot())
     upd, ctx, _sent = _fake_update("private")
     upd.effective_user.id = 99
     run(logic.on_groups(upd, ctx))                                                # /grupy w prywatnej rozmowie
-    assert st.reach(99) is True
-    az = FakeAuthentik([tg_user(2, telegramReachableIDs=["1"])])                  # user bez kont, ale ze starym atrybutem
-    run(TelegramLogic(az, State(), [], ReachBot()).refresh_reachability())
-    assert "telegramReachableIDs" not in az.users[0]["attributes"]
+    assert az.users[0]["attributes"]["telegramReachableIDs"] == ["99"]
 
 
-@pytest.fixture(autouse=True)
-def _no_probe_gap(monkeypatch):
-    import bot.telegram_sync as ts
-    monkeypatch.setattr(ts, "REACH_PROBE_GAP_S", 0)
+def test_contact_record_failure_does_not_break_the_reply():
+    class Broken(FakeAuthentik):
+        async def list_users(self):
+            raise RuntimeError("authentik down")
+    run(TelegramLogic(Broken([]), State(), [], None).note_contact(99))            # nie rzuca
+
+
+def test_linking_through_the_bot_records_contact_too():
+    az = FakeAuthentik([tg_user(1, telegramUsername="@Jan_Kowalski")])
+    ok, _ = run(TelegramLogic(az, State(), [], None).link(1, 99, None, "Jan_Kowalski"))
+    assert ok and az.users[0]["attributes"]["telegramReachableIDs"] == ["99"]

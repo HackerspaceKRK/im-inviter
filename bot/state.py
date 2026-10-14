@@ -43,7 +43,6 @@ class State:
             -- nadpisał atrybuty (np. zapis w usermanagerze): bot pamięta, że zapisał matrixAccounts, a tam pusto.
             CREATE TABLE IF NOT EXISTS written(pk INTEGER PRIMARY KEY, handles TEXT, ts INTEGER);
             -- Czy bot może napisać do konta Telegram (konto musiało kiedyś napisać do bota). Raz osiągalne = zostaje.
-            CREATE TABLE IF NOT EXISTS tg_reach(id TEXT PRIMARY KEY, reachable INTEGER, checked INTEGER);
             CREATE TABLE IF NOT EXISTS tgcodes(
                 hash TEXT PRIMARY KEY, tg_id INTEGER, expires INTEGER);
             """
@@ -155,25 +154,6 @@ class State:
         cur = self.db.execute("INSERT OR IGNORE INTO reported VALUES(?,?)", (key, int(time.time())))
         self.db.commit()
         return cur.rowcount == 1
-
-    # --- Telegram: osiągalność kont (Telegram nie pozwala botowi napisać pierwszemu) ---
-    def set_reach(self, tg_id, reachable: bool, now: Optional[float] = None) -> None:
-        now = time.time() if now is None else now
-        self.db.execute("INSERT OR REPLACE INTO tg_reach VALUES(?,?,?)", (str(tg_id), 1 if reachable else 0, int(now)))
-        self.db.commit()
-
-    def reach(self, tg_id) -> Optional[bool]:
-        """True/False gdy wiemy, None gdy jeszcze nie sprawdzano."""
-        row = self.db.execute("SELECT reachable FROM tg_reach WHERE id=?", (str(tg_id),)).fetchone()
-        return None if row is None else bool(row[0])
-
-    def needs_probe(self, tg_id, now: Optional[float] = None, retry_after: float = 6 * 3600) -> bool:
-        """Czy trzeba (ponownie) sprawdzić konto: nigdy nie sprawdzane albo nieosiągalne i sprawdzone dawno temu."""
-        now = time.time() if now is None else now
-        row = self.db.execute("SELECT reachable, checked FROM tg_reach WHERE id=?", (str(tg_id),)).fetchone()
-        if row is None:
-            return True
-        return not row[0] and now - row[1] >= retry_after
 
     def new_tg_code(self, tg_id: int, now: Optional[float] = None) -> str:
         now = time.time() if now is None else now

@@ -206,12 +206,11 @@ pisać pierwszemu; wtedy wynik to czytelny błąd, a prośba nie wisi w kolejce)
 
 ## Które konta Telegrama bot może zagadnąć
 
-Telegram nie pozwala botowi napisać do kogoś, kto nigdy do niego nie napisał. **Opcjonalnie** (`TELEGRAM_REACH_PROBE=1`, domyślnie wyłączone,
-bo masowe zapytania o nieznane czaty mogłyby wyglądać na skaner) bot ustala to **cicho** przez `getChat` (działa tylko
-dla kont, które już z botem rozmawiały; nic nie jest do nich wysyłane) i publikuje wynik w `telegramReachableIDs`; konto, które
-napisze do bota (`/start`, `/grupy`, przycisk), oznacza się samo. `usermanager` blokuje wtedy przycisk Invite przy kontach spoza
-tej listy. Zapytania idą po jednym na sekundę, 10 kont na przebieg; nieosiągalne konta są sprawdzane ponownie co 6 h. Atrybut jest
-publikowany dla usera dopiero, gdy znany jest status wszystkich jego kont.
+Telegram nie pozwala botowi napisać do kogoś, kto nigdy do niego nie napisał. Bot **niczego nie sprawdza na ślepo** (żadnych
+zapytań o nieznane konta, które wyglądałyby na skaner/spam): gdy konto napisze do bota (`/start`, `/grupy`, przycisk) albo zostanie
+połączone kodem, bot dopisuje jego ID do `telegramReachableIDs`. `usermanager` pokazuje przycisk Invite tylko przy kontach z takim
+śladem. ID wpisane ręcznie przez admina nie ma śladu, dopóki to konto nie napisze do bota (np. `/grupy`); od tego momentu da się
+je zaprosić. Konta połączone przez bota przed tą zmianą (mają `telegramStatus`) `usermanager` uznaje za osiągalne.
 
 ## Spójność z Authentikiem (nadpisane atrybuty)
 

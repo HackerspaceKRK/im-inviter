@@ -17,7 +17,6 @@ grupy po id — to ograniczenie API Telegrama).
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from typing import Any, List, Optional, Tuple
@@ -41,17 +40,6 @@ def parse_tg_requests(value) -> List[dict]:
     return out
 
 
-REACH_RETRY_S = 6 * 3600  # jak często sprawdzamy ponownie konto, które było nieosiągalne
-REACH_PROBES_PER_CYCLE = 10  # ile kont sprawdzamy w jednym przebiegu (rozkładamy pierwsze skanowanie na dłużej)
-REACH_PROBE_GAP_S = 1.0  # przerwa między zapytaniami, żeby nie wyglądać jak skaner
-
-
-def _is_unreachable(e: Exception) -> bool:
-    """Odpowiedź Telegrama „nie znam tego konta” (nigdy nie napisało do bota) — w odróżnieniu od błędu sieci/limitu."""
-    low = str(e).lower()
-    return any(w in low for w in ("chat not found", "forbidden", "user not found", "can't initiate", "blocked"))
-
-
 def _tg_req_key(req: dict) -> tuple:
     return (req["id"], req["by"], req["ts"])
 
@@ -62,6 +50,13 @@ def _tg_err(e: Exception) -> str:
     if "can't initiate" in low or "chat not found" in low or "forbidden" in low or "blocked" in low:
         return ("bot nie może napisać do tego konta (nie napisało jeszcze do bota /start albo go zablokowało)")
     return f"{type(e).__name__}: {text}" if text else type(e).__name__
+
+
+def add_reachable_id(attrs: dict, tg_id) -> None:
+    """Dopisuje ID do `telegramReachableIDs` (zawsze lista tekstów, bez duplikatów); to pole należy tylko do bota."""
+    ids = normalize_tg_ids(attrs.get("telegramReachableIDs"))
+    if str(tg_id) not in ids:
+        attrs["telegramReachableIDs"] = ids + [str(tg_id)]
 
 
 def user_tg_ids(attrs: dict) -> set:
@@ -171,6 +166,7 @@ class TelegramLogic:
 
         def apply(fresh: dict) -> None:
             add_tg_id(fresh, tg_id)
+            add_reachable_id(fresh, tg_id)
             clear_matching_username(fresh, tg_username)
 
         await self.authentik.update_attributes(
@@ -178,6 +174,21 @@ class TelegramLogic:
         )
         log.info("połączono authentik pk=%s z telegram id=%s", pk, tg_id)
         return True, "Połączone ✅"
+
+    async def note_contact(self, tg_id: int) -> None:
+        """Konto napisało do bota (/start, /grupy, przycisk): zapisz ślad w `telegramReachableIDs` jego usera.
+
+        Telegram nie pozwala botowi napisać pierwszemu, więc usermanager na podstawie tego śladu (a nie zgadywania)
+        wie, że do tego konta da się wysłać linki. ID wpisane ręcznie przez admina nie mają śladu, dopóki konto
+        nie napisze do bota. Błąd zapisu nie może psuć odpowiedzi użytkownikowi."""
+        try:
+            users = await self.authentik.list_users()
+            owner = find_linked_user(users, tg_id)
+            if owner is None or str(tg_id) in normalize_tg_ids((owner.get("attributes") or {}).get("telegramReachableIDs")):
+                return
+            await self.authentik.update_attributes(owner["pk"], mutate=lambda fresh: add_reachable_id(fresh, tg_id))
+        except Exception:
+            log.exception("nie udało się zapisać śladu kontaktu tg id=%s", tg_id)
 
     async def send_group_links(self, tg_id: int) -> int:
         """Wysyła w DM „Nazwa grupy: link" (jednorazowe, 24 h). Zwraca liczbę wysłanych linków.
@@ -271,51 +282,6 @@ class TelegramLogic:
             )
         return processed
 
-    async def refresh_reachability(self, budget: int = REACH_PROBES_PER_CYCLE) -> int:
-        """Ustala, do których kont z `telegramIDs` bot może napisać, i publikuje to w `telegramReachableIDs`.
-
-        Telegram nie pozwala botowi napisać pierwszemu, więc przycisk „wyślij linki" ma sens tylko dla kont, które kiedyś
-        napisały do bota. Sprawdzamy to CICHO przez getChat (działa tylko dla użytkowników, którzy już z botem rozmawiali,
-        i nie wysyła nic do usera), a konta, które właśnie napisały do bota, oznaczają się same (handlery).
-        Atrybut jest publikowany dla usera dopiero, gdy znamy status WSZYSTKICH jego kont (inaczej UI uznałby nieznane
-        za nieosiągalne). Zwraca liczbę sprawdzonych kont."""
-        if not self.bot:
-            return 0
-        users = await self.authentik.list_users()
-        wanted = sorted({i for u in users for i in user_tg_ids(u.get("attributes") or {}) if i.isdigit()})
-        probed, now = 0, time.time()
-        for tg_id in wanted:
-            if probed >= budget:
-                break
-            if not self.state.needs_probe(tg_id, now, REACH_RETRY_S):
-                continue
-            try:
-                await self.bot.get_chat(int(tg_id))
-                self.state.set_reach(tg_id, True, now)
-            except Exception as e:
-                if _is_unreachable(e):
-                    self.state.set_reach(tg_id, False, now)
-                else:  # błąd sieci/limit: nie wnioskujemy nic, spróbujemy w następnym przebiegu
-                    log.warning("sprawdzenie osiągalności tg id=%s nie powiodło się: %s", tg_id, e)
-                    break
-            probed += 1
-            if REACH_PROBE_GAP_S:
-                await asyncio.sleep(REACH_PROBE_GAP_S)
-        for u in users:
-            attrs = u.get("attributes") or {}
-            owned = sorted(i for i in user_tg_ids(attrs) if i.isdigit())
-            have = attrs.get("telegramReachableIDs")
-            if not owned:
-                if have is not None:
-                    await self.authentik.update_attributes(u["pk"], remove=["telegramReachableIDs"])
-                continue
-            if any(self.state.reach(i) is None for i in owned):
-                continue  # jeszcze nie znamy wszystkich kont tego usera
-            reachable = [i for i in owned if self.state.reach(i)]
-            if sorted(normalize_tg_ids(have)) != reachable or have is None:
-                await self.authentik.update_attributes(u["pk"], {"telegramReachableIDs": reachable})
-        return probed
-
     async def poll_codes(self) -> int:
         """Ścieżka B: userzy, którzy wkleili kod w Authentiku. Zwraca liczbę połączonych."""
         users = await self.authentik.list_users()
@@ -356,7 +322,7 @@ class TelegramLogic:
             await self._reply_in_group(update, context, "/start")
             return
         u = update.effective_user
-        self.state.set_reach(u.id, True)  # napisało do bota: od teraz bot może do niego pisać
+        await self.note_contact(u.id)
         text, pk = await self.start_reply(u.id, u.username)
         log.info("/start od tg id=%s username=%s -> %s", u.id, u.username,
                  f"pytanie o potwierdzenie (authentik pk={pk})" if pk is not None else "bez dopasowania")
@@ -386,7 +352,7 @@ class TelegramLogic:
             await self._reply_in_group(update, context, "/grupy")
             return
         u = update.effective_user
-        self.state.set_reach(u.id, True)
+        await self.note_contact(u.id)
         send, text = await self.groups_reply(u.id)
         log.info("/grupy od tg id=%s -> %s", u.id, "wysyłam linki" if send else "odmowa")
         if send:
@@ -402,7 +368,7 @@ class TelegramLogic:
             return
         pk = int(q.data.split(":", 1)[1])
         u = q.from_user
-        self.state.set_reach(u.id, True)
+        await self.note_contact(u.id)
         log.info("potwierdzenie od tg id=%s username=%s dla authentik pk=%s", u.id, u.username, pk)
         users = await self.authentik.list_users()
         # Powtórna weryfikacja w chwili kliknięcia: wniosek nadal istnieje i pasuje do username.
