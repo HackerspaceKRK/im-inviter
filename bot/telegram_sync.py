@@ -105,14 +105,15 @@ def clear_matching_username(attrs: dict, tg_username: Optional[str]) -> None:
 
 class TelegramLogic:
     def __init__(self, authentik: Any, state: Any, groups: List[int], bot: Any = None,
-                 settings_url: str = "", member_tag: str = ""):
+                 settings_url: str = "", member_tag: str = "", expired_suffix: str = ""):
         self.authentik = authentik
-        self._verified_cache: Optional[Tuple[float, set]] = None  # (monotonic, zbiór zweryfikowanych ID)
+        self._verified_cache: Optional[Tuple[float, dict]] = None  # (monotonic, ID -> tag)
         # Grupy z TELEGRAM_GROUPS, w których tagowanie ma sens (przegląd `review_chats`); None = jeszcze nie sprawdzono
         # (wtedy próbujemy we wszystkich). Kanały nie mają członków z tagami: setChatMemberTag działa tylko w grupach.
         self.tag_chats: Optional[List[int]] = None
         self._me_id: Optional[int] = None
         self._last_review: Optional[float] = None  # monotonic czas ostatniego przeglądu
+        self.expired_suffix = expired_suffix.strip()  # dopisek do tagu dla wygasłego członkostwa, np. „*”; pusty = bez
         self.member_tag = member_tag.strip()  # np. „Verified”; pusty = bot nie ustawia tagów
         self._tag_warned: set = set()  # (grupa, błąd): ten sam problem logujemy raz, nie przy każdym kontakcie
         self.state = state
@@ -265,8 +266,28 @@ class TelegramLogic:
         except Exception:
             log.exception("przegląd czatów nie powiódł się")
 
-    async def _tag_in_chat(self, chat: int, tg_id: int) -> str:
-        """„set” (ustawiono), „has” (już ma), „skip” (nie jest zwykłym członkiem tej grupy), „error”."""
+    def _tag_for(self, user: dict, now: Optional[float] = None) -> str:
+        """Tag usera: `member_tag`, a z dopiskiem (`expired_suffix`), gdy konto jest nieaktywne albo jego członkostwo wygasło
+        (`membershipExpirationTimestamp` w przeszłości). Brak daty = bez dopisku (nie karzemy kont bez danych)."""
+        if not self.expired_suffix:
+            return self.member_tag
+        now = time.time() if now is None else now
+        raw = (user.get("attributes") or {}).get("membershipExpirationTimestamp")
+        try:
+            expired = float(raw) <= now if raw not in (None, "") else False
+        except (TypeError, ValueError):
+            expired = False
+        return self.member_tag + self.expired_suffix if (expired or user.get("is_active", True) is False) else self.member_tag
+
+    def _tag_map(self, users: List[dict]) -> dict:
+        """ID Telegrama (int) -> tag, jaki ma mieć, dla każdego ID z `telegramIDs` (patrz `verified_tg_ids`)."""
+        now = time.time()
+        return {int(i): self._tag_for(u, now) for u in users for i in verified_tg_ids(u.get("attributes") or {}) if i.isdigit()}
+
+    async def _tag_in_chat(self, chat: int, tg_id: int, want: Optional[str] = None) -> str:
+        """„set” (ustawiono), „has” (już ma albo ma cudzy tag, którego nie ruszamy), „skip” (nie jest zwykłym członkiem tej
+        grupy), „error”. Zmieniamy tylko tag pusty albo własny (`Verified` / `Verified*`), nie ręcznie ustawiony przez admina grupy."""
+        want = want or self.member_tag
         try:
             member = await self.bot.get_chat_member(chat, tg_id)
             # `tag` w wersji 21 biblioteki nie jest jeszcze polem obiektu: ląduje w api_kwargs
@@ -274,11 +295,11 @@ class TelegramLogic:
             # tylko zwykli członkowie (admini mają custom_title, a spoza grupy nie ma komu nadać tagu)
             if member.status not in ("member", "restricted"):
                 return "skip"
-            if current == self.member_tag:
+            if current == want or (current and current not in (self.member_tag, self.member_tag + self.expired_suffix)):
                 return "has"
             await self.bot.do_api_request(
-                "setChatMemberTag", api_kwargs={"chat_id": chat, "user_id": tg_id, "tag": self.member_tag})
-            log.info("tag %r ustawiony: tg id=%s grupa=%s", self.member_tag, tg_id, chat)
+                "setChatMemberTag", api_kwargs={"chat_id": chat, "user_id": tg_id, "tag": want})
+            log.info("tag %r ustawiony: tg id=%s grupa=%s", want, tg_id, chat)
             return "set"
         except Exception as e:
             key = (chat, str(e))
@@ -289,73 +310,74 @@ class TelegramLogic:
             return "error"
 
     async def tag_verified(self, tg_id: int) -> int:
-        """Ustawia tag (np. „Verified”) zwykłemu członkowi każdej grupy z TELEGRAM_GROUPS, jeśli to konto jest zweryfikowane (patrz
-        `verified_tg_ids`). Zwraca liczbę grup, w których tag został właśnie ustawiony.
+        """Ustawia tag (np. „Verified”, albo „Verified*” przy wygasłym członkostwie) zwykłemu członkowi każdej grupy, w której
+        tagujemy, jeśli ID jest w `telegramIDs` jakiegoś usera. Zwraca liczbę grup, w których tag został właśnie ustawiony.
 
         Wymaga w grupie: bot jako admin z prawem `can_manage_tags`. Wołamy surowe API (`do_api_request`), bo biblioteka
         w wersji 21 nie ma jeszcze tej metody. Błąd w jednej grupie nie blokuje pozostałych ani odpowiedzi użytkownikowi."""
         if not (self.bot and self.member_tag and self._tag_targets()):
             return 0
         try:
-            users = await self.authentik.list_users()
-            owner = find_linked_user(users, tg_id)
-            if owner is None or str(tg_id) not in verified_tg_ids(owner.get("attributes") or {}):
+            users = await self.authentik.list_users(include_inactive=True)  # nieaktywni też: dostają dopisek wygaśnięcia
+            want = self._tag_map(users).get(int(tg_id))
+            if want is None:
                 return 0
         except Exception:
             log.exception("nie udało się sprawdzić, czy tg id=%s jest zweryfikowane", tg_id)
             return 0
         done = 0
         for chat in self._tag_targets():
-            result = await self._tag_in_chat(chat, tg_id)
-            self.state.set_tag_pair(chat, tg_id, result in ("set", "has"))
+            result = await self._tag_in_chat(chat, tg_id, want)
+            self.state.set_tag_pair(chat, tg_id, result in ("set", "has"), None, want)
             done += result == "set"
         return done
 
     async def backfill_tags(self, budget: int = TAG_BACKFILL_BUDGET) -> int:
-        """Dosypuje tagi kontom już zweryfikowanym (także tym połączonym, zanim tagi istniały), po `budget` par (grupa, konto)
-        na przebieg i z przerwą między zapytaniami, żeby nie zalewać Telegrama. Załatwione pary nie są sprawdzane drugi raz;
+        """Dosypuje tagi kontom z `telegramIDs` (także połączonym, zanim tagi istniały) i poprawia te, którym zmienił się
+        oczekiwany tag (wygasłe członkostwo dostaje dopisek, odnowione go traci). Po `budget` par (grupa, konto) na przebieg,
+        z przerwą między zapytaniami. Załatwione pary z właściwym tagiem nie są sprawdzane drugi raz (zero zapytań);
         konto spoza grupy jest sprawdzane ponownie co kilka godzin. Zwraca liczbę sprawdzonych par."""
         chats = self._tag_targets()
         if not (self.bot and self.member_tag and chats):
             return 0
-        users = await self.authentik.list_users()
-        wanted = sorted({int(i) for u in users for i in verified_tg_ids(u.get("attributes") or {}) if i.isdigit()})
+        users = await self.authentik.list_users(include_inactive=True)
+        wanted = sorted(self._tag_map(users).items())
         checked, now = 0, time.time()
         for chat in chats:
-            for tg_id in wanted:
+            for tg_id, want in wanted:
                 if checked >= budget:
                     return checked
-                if not self.state.tag_pair_due(chat, tg_id, now, TAG_RECHECK_S):
+                if not self.state.tag_pair_due(chat, tg_id, now, TAG_RECHECK_S, want):
                     continue
-                result = await self._tag_in_chat(chat, tg_id)
-                self.state.set_tag_pair(chat, tg_id, result in ("set", "has"), now)
+                result = await self._tag_in_chat(chat, tg_id, want)
+                self.state.set_tag_pair(chat, tg_id, result in ("set", "has"), now, want)
                 checked += 1
                 if TAG_GAP_S:
                     await asyncio.sleep(TAG_GAP_S)
         return checked
 
-    async def _verified_set(self) -> set:
-        """Zweryfikowane ID Telegrama (patrz `verified_tg_ids`), z krótkim cache: grupa może pisać wiele wiadomości na minutę."""
+    async def _tag_map_cached(self) -> dict:
+        """`_tag_map` z krótkim cache: grupa może pisać wiele wiadomości na minutę."""
         now = time.monotonic()
         if self._verified_cache and now - self._verified_cache[0] < VERIFIED_CACHE_TTL_S:
             return self._verified_cache[1]
-        users = await self.authentik.list_users()
-        ids = {int(i) for u in users for i in verified_tg_ids(u.get("attributes") or {}) if i.isdigit()}
-        self._verified_cache = (now, ids)
-        return ids
+        tags = self._tag_map(await self.authentik.list_users(include_inactive=True))
+        self._verified_cache = (now, tags)
+        return tags
 
     async def on_group_message(self, update: Any, context: Any) -> None:
-        """Wiadomość na grupie, w której tagujemy: jeśli nadawca ma ID w `telegramIDs`, a tej pary (grupa, konto) jeszcze nie
-        załatwiono, nadaj tag (potem zero zapytań). Boty i wiadomości „w imieniu kanału/grupy” (anonimowi admini) pomijamy.
-        Bot widzi wszystkie wiadomości tylko jako admin grupy."""
+        """Wiadomość na grupie, w której tagujemy: jeśli nadawca ma ID w `telegramIDs`, a tej pary (grupa, konto) nie załatwiono
+        jeszcze z właściwym tagiem, ustaw go (potem zero zapytań). Boty i wiadomości „w imieniu kanału/grupy” (anonimowi admini)
+        pomijamy. Bot widzi wszystkie wiadomości tylko jako admin grupy."""
         chat, user, msg = update.effective_chat, update.effective_user, update.effective_message
         if (not self.bot or not self.member_tag or chat is None or chat.id not in self._tag_targets() or user is None
                 or user.is_bot or msg is None or getattr(msg, "sender_chat", None) is not None):
             return
         try:
-            if user.id in await self._verified_set() and self.state.tag_pair_due(chat.id, user.id, None, TAG_RECHECK_S):
-                result = await self._tag_in_chat(chat.id, user.id)
-                self.state.set_tag_pair(chat.id, user.id, result in ("set", "has"))
+            want = (await self._tag_map_cached()).get(user.id)
+            if want is not None and self.state.tag_pair_due(chat.id, user.id, None, TAG_RECHECK_S, want):
+                result = await self._tag_in_chat(chat.id, user.id, want)
+                self.state.set_tag_pair(chat.id, user.id, result in ("set", "has"), None, want)
         except Exception as e:
             key = (chat.id, "msg", str(e))
             if key not in self._tag_warned:

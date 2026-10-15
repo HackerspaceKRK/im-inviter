@@ -70,7 +70,8 @@ class FakeAuthentik:
         self.writes = []
 
     async def list_users(self, include_inactive=False):
-        return self.users
+        # jak prawdziwy klient: domyślnie bez nieaktywnych
+        return [u for u in self.users if include_inactive or u.get("is_active", True)]
 
     before_write = None  # symulacja: admin dopisuje coś do atrybutów tuż przed zapisem bota
 
@@ -1441,3 +1442,77 @@ def test_review_runs_once_then_only_after_the_interval():
     logic._last_review -= 3601
     run(logic.maybe_review_chats())
     assert len(bot.api_calls) > calls
+
+
+# ---------- „Verified*” dla wygasłego członkostwa ----------
+def _member(pk, tg, ts=None, active=True):
+    attrs = {"telegramIDs": [str(tg)]}
+    if ts is not None:
+        attrs["membershipExpirationTimestamp"] = ts
+    u = tg_user(pk, **attrs)
+    u["is_active"] = active
+    return u
+
+
+def _star_logic(users, members, **kw):
+    bot = TagBot(members)
+    return bot, TelegramLogic(FakeAuthentik(users), State(), [-1], bot, member_tag="Verified", expired_suffix="*", **kw)
+
+
+def test_expired_or_inactive_accounts_get_the_suffix_and_accounts_without_a_date_do_not():
+    now = time.time()
+    users = [_member(1, 11, now + 86400), _member(2, 22, now - 86400), _member(3, 33), _member(4, 44, now + 86400, active=False)]
+    bot, logic = _star_logic(users, {(-1, i): {"status": "member"} for i in (11, 22, 33, 44)})
+    run(logic.backfill_tags(budget=10))
+    tags = {c[1]["user_id"]: c[1]["tag"] for c in bot.tags()}
+    assert tags == {11: "Verified", 22: "Verified*", 33: "Verified", 44: "Verified*"}   # brak daty (33) nie dostaje gwiazdki
+
+
+def test_renewal_removes_the_suffix_and_expiry_adds_it_without_extra_requests_when_nothing_changed():
+    now = time.time()
+    users = [_member(1, 11, now - 100)]
+    bot, logic = _star_logic(users, {(-1, 11): {"status": "member"}})
+    run(logic.backfill_tags())
+    assert bot.members[(-1, 11)]["tag"] == "Verified*"
+    n = len(bot.api_calls)
+    run(logic.backfill_tags())                                                    # nic się nie zmieniło: zero zapytań
+    assert len(bot.api_calls) == n
+    logic.authentik.users[0]["attributes"]["membershipExpirationTimestamp"] = now + 86400      # odnowił członkostwo
+    run(logic.backfill_tags())
+    assert bot.members[(-1, 11)]["tag"] == "Verified"
+    logic.authentik.users[0]["attributes"]["membershipExpirationTimestamp"] = now - 1          # znów wygasło
+    run(logic.backfill_tags())
+    assert bot.members[(-1, 11)]["tag"] == "Verified*"
+
+
+def test_a_tag_set_by_someone_else_is_never_overwritten():
+    now = time.time()
+    bot, logic = _star_logic([_member(1, 11, now - 100)], {(-1, 11): {"status": "member", "tag": "Szef kuchni"}})
+    run(logic.backfill_tags())
+    assert bot.tags() == [] and bot.members[(-1, 11)]["tag"] == "Szef kuchni"
+
+
+def test_suffix_disabled_when_empty_and_message_trigger_uses_the_suffix():
+    now = time.time()
+    bot = TagBot({(-1, 11): {"status": "member"}, (-1, 22): {"status": "member"}})
+    users = [_member(1, 11, now - 100), _member(2, 22, now + 86400)]
+    plain = TelegramLogic(FakeAuthentik(users), State(), [-1], bot, member_tag="Verified")      # bez dopisku
+    run(plain.on_group_message(_group_msg(11), None))
+    assert bot.members[(-1, 11)]["tag"] == "Verified"
+    bot2 = TagBot({(-1, 11): {"status": "member"}, (-1, 22): {"status": "member"}})
+    star = TelegramLogic(FakeAuthentik(users), State(), [-1], bot2, member_tag="Verified", expired_suffix="*")
+    run(star.on_group_message(_group_msg(11), None)); run(star.on_group_message(_group_msg(22), None))
+    assert (bot2.members[(-1, 11)]["tag"], bot2.members[(-1, 22)]["tag"]) == ("Verified*", "Verified")
+
+
+def test_old_state_databases_get_the_tag_column(tmp_path):
+    import sqlite3
+    path = str(tmp_path / "old.db")
+    db = sqlite3.connect(path)
+    db.executescript("CREATE TABLE tag_checked(chat INTEGER, user INTEGER, done INTEGER, ts INTEGER, PRIMARY KEY(chat, user));"
+                     "INSERT INTO tag_checked VALUES(-1, 11, 1, 100);")
+    db.commit(); db.close()
+    st = State(path)                                                                # migracja kolumny przy otwarciu
+    assert st.tag_pair_due(-1, 11, want="Verified")                                 # stary wpis nie zna tagu: sprawdzamy raz jeszcze
+    st.set_tag_pair(-1, 11, True, tag="Verified")
+    assert not st.tag_pair_due(-1, 11, want="Verified") and st.tag_pair_due(-1, 11, want="Verified*")

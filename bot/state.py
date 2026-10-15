@@ -50,6 +50,10 @@ class State:
                 hash TEXT PRIMARY KEY, tg_id INTEGER, expires INTEGER);
             """
         )
+        try:  # starsze bazy nie mają kolumny z ostatnio ustawionym tagiem
+            self.db.execute("ALTER TABLE tag_checked ADD COLUMN tag TEXT")
+        except sqlite3.OperationalError:
+            pass
         self.db.commit()
 
     # --- Matrix ---
@@ -159,15 +163,22 @@ class State:
         return cur.rowcount == 1
 
     # --- Telegram: tagi na grupach ---
-    def tag_pair_due(self, chat: int, user: int, now: Optional[float] = None, retry_after: float = 6 * 3600) -> bool:
-        """Czy trzeba (ponownie) sprawdzić parę: nigdy nie sprawdzana albo niezałatwiona (nie ma go w grupie) dawno temu."""
+    def tag_pair_due(self, chat: int, user: int, now: Optional[float] = None, retry_after: float = 6 * 3600,
+                     want: Optional[str] = None) -> bool:
+        """Czy trzeba (ponownie) sprawdzić parę: nigdy nie sprawdzana, niezałatwiona (nie ma go w grupie) dawno temu, albo
+        załatwiona z INNYM tagiem niż `want` (np. członkostwo wygasło: „Verified” -> „Verified*”). Bez zapytań do Telegrama."""
         now = time.time() if now is None else now
-        row = self.db.execute("SELECT done, ts FROM tag_checked WHERE chat=? AND user=?", (int(chat), int(user))).fetchone()
-        return row is None or (not row[0] and now - row[1] >= retry_after)
+        row = self.db.execute("SELECT done, ts, tag FROM tag_checked WHERE chat=? AND user=?", (int(chat), int(user))).fetchone()
+        if row is None:
+            return True
+        if not row[0]:
+            return now - row[1] >= retry_after
+        return want is not None and row[2] != want
 
-    def set_tag_pair(self, chat: int, user: int, done: bool, now: Optional[float] = None) -> None:
+    def set_tag_pair(self, chat: int, user: int, done: bool, now: Optional[float] = None, tag: Optional[str] = None) -> None:
         now = time.time() if now is None else now
-        self.db.execute("INSERT OR REPLACE INTO tag_checked VALUES(?,?,?,?)", (int(chat), int(user), 1 if done else 0, int(now)))
+        self.db.execute("INSERT OR REPLACE INTO tag_checked(chat, user, done, ts, tag) VALUES(?,?,?,?,?)",
+                        (int(chat), int(user), 1 if done else 0, int(now), tag))
         self.db.commit()
 
     def new_tg_code(self, tg_id: int, now: Optional[float] = None) -> str:

@@ -49,7 +49,13 @@ async def amain(dry_run: bool, once: bool, audit: bool = False) -> None:
         if len(member_tag.strip()) > 16:  # limit Telegrama; dłuższy tag tylko generowałby błędy
             log.error("TELEGRAM_MEMBER_TAG ma ponad 16 znaków: tagi wyłączone")
             member_tag = ""
-        tg_logic = TelegramLogic(authentik, state, groups, settings_url=settings_url, member_tag=member_tag)
+        # Dopisek do tagu dla wygasłego/nieaktywnego konta (Verified*); pusty = wyłączony
+        suffix = os.environ.get("TELEGRAM_EXPIRED_TAG_SUFFIX", "*")
+        if len((member_tag + suffix).strip()) > 16:
+            log.error("TELEGRAM_MEMBER_TAG + TELEGRAM_EXPIRED_TAG_SUFFIX ma ponad 16 znaków: dopisek wyłączony")
+            suffix = ""
+        tg_logic = TelegramLogic(authentik, state, groups, settings_url=settings_url, member_tag=member_tag,
+                                 expired_suffix=suffix)
         tg_app = Application.builder().token(os.environ["TELEGRAM_TOKEN"]).build()
         tg_logic.bot = tg_app.bot
         tg_app.add_handler(CommandHandler("start", tg_logic.on_start))

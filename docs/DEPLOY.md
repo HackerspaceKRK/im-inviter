@@ -229,6 +229,13 @@ kontaktu (`telegramReachableIDs`, czyli bot może do Ciebie pisać) i od razu na
 i `/grupy`); gdy bot nie zna konta, podpowiada, co zrobić (wpisać @username w ustawieniach i wysłać `/start`). Użyte na grupie z `TELEGRAM_GROUPS`
 bot odsyła krótką instrukcję „pisz na priv" (jak przy `/start` i `/grupy`), niczego nie zapisuje.
 
+**Dopisek dla wygasłego członkostwa („Verified*").** Gdy konto usera jest nieaktywne w Authentiku albo jego `membershipExpirationTimestamp`
+jest w przeszłości, tag dostaje dopisek (`TELEGRAM_EXPIRED_TAG_SUFFIX`, domyślnie `*`, puste = wyłączony; razem z `TELEGRAM_MEMBER_TAG` max 16
+znaków). Brak daty członkostwa dopisku nie daje. Gdy członkostwo zostanie odnowione, dopisek znika. Bot pamięta, jaki tag ustawił w danej
+grupie, więc zmianę (wygaśnięcie, odnowienie) wykrywa z danych z Authentika i poprawia tag w ramach zwykłego budżetu 20 par na przebieg, bez
+dodatkowych zapytań dla niezmienionych kont. **Tagu ustawionego ręcznie przez admina grupy (innego niż `Verified`/`Verified*`) bot nie
+nadpisuje.** Kto wygasa w trakcie dnia, dostaje gwiazdkę przy najbliższym przebiegu bota (kilka minut).
+
 **Przegląd czatów.** Przy starcie i potem co godzinę bot sprawdza każdy czat z `TELEGRAM_GROUPS`: tagi nadaje tylko w **grupach i
 supergrupach, w których jest adminem z prawem Manage tags**. **Kanały** są pomijane (Telegram: `setChatMemberTag` działa tylko w grupach i
 supergrupach; linki do kanałów z `/grupy` dalej działają). W logu jest po jednej linii na pominięty czat z powodem i podsumowanie
