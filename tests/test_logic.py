@@ -1,4 +1,6 @@
 import asyncio
+import time
+import pytest
 
 from bot.handles import (
     pending_age_label,
@@ -1232,3 +1234,59 @@ def test_linking_through_the_bot_tags_the_account():
     az = FakeAuthentik([tg_user(1, telegramUsername="@Jan_Kowalski")])
     ok, _ = run(TelegramLogic(az, State(), [-1], bot, member_tag="Verified").link(1, 99, None, "Jan_Kowalski"))
     assert ok and len(bot.tags()) == 1
+
+
+@pytest.fixture(autouse=True)
+def _no_tag_gap(monkeypatch):
+    import bot.telegram_sync as ts
+    monkeypatch.setattr(ts, "TAG_GAP_S", 0)
+
+
+def test_verified_ids_rule_covers_accounts_linked_before_the_contact_trace_existed():
+    from bot.telegram_sync import verified_tg_ids
+    assert verified_tg_ids({"telegramIDs": ["1", "2"], "telegramReachableIDs": ["2"]}) == {"2"}           # jest ślad: tylko on
+    assert verified_tg_ids({"telegramIDs": ["1", "2"], "telegramStatus": "ok"}) == {"1", "2"}             # stary user połączony przez bota
+    assert verified_tg_ids({"telegramIDs": ["1"]}) == set()                                               # wpisane ręcznie, bez kontaktu
+    assert verified_tg_ids({"telegramIDs": ["1"], "telegramStatus": "zły lub wygasły kod"}) == set()      # błąd to nie weryfikacja
+    assert verified_tg_ids({"telegramIDs": ["1"], "telegramReachableIDs": [], "telegramStatus": "ok"}) == set()  # lista jest, pusta
+
+
+def test_backfill_tags_already_linked_accounts_within_budget_and_never_twice():
+    members = {(-1, 11): {"status": "member"}, (-1, 22): {"status": "member"}, (-1, 33): {"status": "member"},
+               (-1, 44): {"status": "member"}}
+    bot = TagBot(members)
+    az = FakeAuthentik([
+        tg_user(1, telegramIDs=["11"], telegramStatus="ok"),                    # połączony przed istnieniem śladu
+        tg_user(2, telegramIDs=["22"], telegramReachableIDs=["22"]),
+        tg_user(3, telegramIDs=["33"], telegramStatus="ok"),
+        tg_user(4, telegramIDs=["44"]),                                         # ręczne ID bez kontaktu: nie ruszamy
+    ])
+    logic = TelegramLogic(az, State(), [-1], bot, member_tag="Verified")
+    assert run(logic.backfill_tags(budget=2)) == 2                              # budżet na przebieg
+    assert len(bot.tags()) == 2
+    assert run(logic.backfill_tags(budget=2)) == 1                              # reszta w następnym przebiegu
+    assert sorted(c[1]["user_id"] for c in bot.tags()) == [11, 22, 33]
+    before = len(bot.api_calls)
+    assert run(logic.backfill_tags(budget=10)) == 0                             # wszystko załatwione: zero zapytań
+    assert len(bot.api_calls) == before
+    assert (-1, 44) not in [(c[1]["chat_id"], c[1]["user_id"]) for c in bot.api_calls]
+
+
+def test_backfill_rechecks_a_account_outside_the_group_only_after_a_while():
+    st = State()
+    bot = TagBot({})                                                            # nikogo nie ma w grupie
+    az = FakeAuthentik([tg_user(1, telegramIDs=["11"], telegramStatus="ok")])
+    logic = TelegramLogic(az, st, [-1], bot, member_tag="Verified")
+    assert run(logic.backfill_tags()) == 1
+    assert run(logic.backfill_tags()) == 0                                      # świeżo sprawdzone: czekamy
+    bot.members[(-1, 11)] = {"status": "member"}                                # dołączył do grupy
+    assert st.tag_pair_due(-1, 11, now=time.time() + 7 * 3600)                  # po 6 h para wraca do kolejki
+    st.db.execute("UPDATE tag_checked SET ts=ts-7*3600")
+    assert run(logic.backfill_tags()) == 1 and len(bot.tags()) == 1
+
+
+def test_tags_only_in_configured_groups():
+    bot = TagBot({(-1, 99): {"status": "member"}, (-9, 99): {"status": "member"}})
+    az = FakeAuthentik([tg_user(1, telegramIDs=["99"], telegramReachableIDs=["99"])])
+    run(TelegramLogic(az, State(), [-1], bot, member_tag="Verified").tag_verified(99))
+    assert [c[1]["chat_id"] for c in bot.tags()] == [-1]                        # grupa -9 spoza TELEGRAM_GROUPS nietknięta

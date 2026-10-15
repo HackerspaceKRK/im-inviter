@@ -214,17 +214,23 @@ je zaprosić. Konta połączone przez bota przed tą zmianą (mają `telegramSta
 
 ## Tag „Verified” na grupach Telegrama
 
-Bot ustawia zwykłym członkom grup z `TELEGRAM_GROUPS` tag (domyślnie `Verified`, zmiana/wyłączenie: `TELEGRAM_MEMBER_TAG`, puste = wyłączone,
-max 16 znaków, bez emoji). **Zweryfikowane** = ID jest w `telegramIDs` jakiegoś usera **i** w `telegramReachableIDs` (konto napisało do bota:
-`/start`, `/grupy`, przycisk albo kod, więc je kontroluje). ID wpisane ręcznie przez admina dostaje tag dopiero po pierwszej wiadomości
-do bota. Tag jest nadawany przy takim kontakcie i przy wejściu do grupy (zdarzenie `chat_member`).
+Bot ustawia zwykłym członkom grup z `TELEGRAM_GROUPS` (tylko tych) tag, domyślnie `Verified` (zmiana/wyłączenie: `TELEGRAM_MEMBER_TAG`, puste =
+wyłączone, max 16 znaków, bez emoji). **Zweryfikowane** = ID jest w `telegramIDs` jakiegoś usera **i**:
+- jest w `telegramReachableIDs` (konto napisało do bota: `/start`, `/grupy`, przycisk albo kod, więc je kontroluje), **albo**
+- user nie ma tego atrybutu, ale ma `telegramStatus` = `ok` (połączony przez bota, zanim atrybut istniał): wtedy wszystkie jego ID.
+
+ID wpisane ręcznie przez admina dostaje tag dopiero po pierwszej wiadomości do bota.
+
+**Kiedy:** przy kontakcie z botem, przy połączeniu konta, przy wejściu do grupy (zdarzenie `chat_member`) oraz **dosypem dla już połączonych**: w
+każdym przebiegu bot sprawdza do 20 par (grupa, konto), z przerwą 0,5 s, i pomija pary już załatwione. Konto, którego nie ma w grupie, jest
+sprawdzane ponownie najwcześniej po 6 h. Przy kilkuset kontach pierwszy dosyp trwa kilkanaście minut, potem dzieje się niemal nic.
 
 **Wymaga w każdej grupie:** bot jako administrator z prawem **Manage tags** (`can_manage_tags`), oprócz „Invite users". Bez tego w logu
 pojawi się jedno ostrzeżenie na grupę, a reszta bota działa normalnie. Admini i właściciel grupy tagu nie dostają (mają własny „custom title").
-Biblioteka `python-telegram-bot` 21 nie ma jeszcze metody `setChatMemberTag`, więc bot woła ją surowo (`do_api_request`); odczyt członka idzie zwykłym `get_chat_member`.
+Biblioteka `python-telegram-bot` 21 nie ma metody `setChatMemberTag`, więc bot woła ją surowo (`do_api_request`); odczyt członka idzie zwykłym
+`get_chat_member`.
 
-**Nie zdejmuje tagu:** gdy ID zniknie z `telegramIDs` albo user straci członkostwo, tag zostaje do ręcznego usunięcia (świadomie, bez cyklicznego
-przeglądu grup).
+**Nie zdejmuje tagu:** gdy ID zniknie z `telegramIDs` albo user straci członkostwo, tag zostaje do ręcznego usunięcia (świadomie).
 
 ## Spójność z Authentikiem (nadpisane atrybuty)
 

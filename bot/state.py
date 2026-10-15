@@ -43,6 +43,9 @@ class State:
             -- nadpisał atrybuty (np. zapis w usermanagerze): bot pamięta, że zapisał matrixAccounts, a tam pusto.
             CREATE TABLE IF NOT EXISTS written(pk INTEGER PRIMARY KEY, handles TEXT, ts INTEGER);
             -- Czy bot może napisać do konta Telegram (konto musiało kiedyś napisać do bota). Raz osiągalne = zostaje.
+            -- Tagi na grupach: para (grupa, user) po sprawdzeniu, done=1 = tag jest.
+            CREATE TABLE IF NOT EXISTS tag_checked(
+                chat INTEGER, user INTEGER, done INTEGER, ts INTEGER, PRIMARY KEY(chat, user));
             CREATE TABLE IF NOT EXISTS tgcodes(
                 hash TEXT PRIMARY KEY, tg_id INTEGER, expires INTEGER);
             """
@@ -154,6 +157,18 @@ class State:
         cur = self.db.execute("INSERT OR IGNORE INTO reported VALUES(?,?)", (key, int(time.time())))
         self.db.commit()
         return cur.rowcount == 1
+
+    # --- Telegram: tagi na grupach ---
+    def tag_pair_due(self, chat: int, user: int, now: Optional[float] = None, retry_after: float = 6 * 3600) -> bool:
+        """Czy trzeba (ponownie) sprawdzić parę: nigdy nie sprawdzana albo niezałatwiona (nie ma go w grupie) dawno temu."""
+        now = time.time() if now is None else now
+        row = self.db.execute("SELECT done, ts FROM tag_checked WHERE chat=? AND user=?", (int(chat), int(user))).fetchone()
+        return row is None or (not row[0] and now - row[1] >= retry_after)
+
+    def set_tag_pair(self, chat: int, user: int, done: bool, now: Optional[float] = None) -> None:
+        now = time.time() if now is None else now
+        self.db.execute("INSERT OR REPLACE INTO tag_checked VALUES(?,?,?,?)", (int(chat), int(user), 1 if done else 0, int(now)))
+        self.db.commit()
 
     def new_tg_code(self, tg_id: int, now: Optional[float] = None) -> str:
         now = time.time() if now is None else now
