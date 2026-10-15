@@ -130,12 +130,24 @@ async def check_telegram(c: httpx.AsyncClient) -> bool:
         return False
     me, ok = r.json()["result"], True
     say(True, f"Telegram: bot @{me['username']}")
-    for g in _csv("TELEGRAM_GROUPS"):
+    from .telegram_sync import parse_tg_chats
+    chats = parse_tg_chats(os.environ)
+    if chats.legacy:
+        say(True, f"Telegram: TELEGRAM_GROUPS jest przestarzałe ({chats.legacy}), traktowane jak publiczne bez tagów",
+            "przenieś do TELEGRAM_MEMBERS_GROUPS / TELEGRAM_PUBLIC_GROUPS / TELEGRAM_CHANNELS")
+    roles = ([(g, "members") for g in chats.members] + [(g, "publiczna") for g in chats.public]
+             + [(g, "kanał") for g in chats.channels] + [(g, "legacy") for g in chats.legacy])
+    for g, role in roles:
         r = await c.get(f"{base}/getChatMember", params={"chat_id": g, "user_id": me["id"]})
         res = r.json().get("result", {}) if r.status_code == 200 else {}
-        can = res.get("status") == "creator" or (res.get("status") == "administrator" and res.get("can_invite_users"))
-        ok &= say(bool(can), f"Telegram {g}: bot jest adminem z prawem zapraszania",
-                  "dodaj bota do grupy jako admina z 'Invite users'")
+        admin = res.get("status") == "creator" or res.get("status") == "administrator"
+        can = res.get("status") == "creator" or (admin and res.get("can_invite_users"))
+        ok &= say(bool(can), f"Telegram {g} ({role}): bot jest adminem z prawem zapraszania",
+                  "dodaj bota do czatu jako admina z 'Invite users'")
+        if role == "members":
+            # tag Verified: bez tego prawa tagi na grupie members nie zadziałają (reszta bota tak)
+            say(bool(admin and res.get("can_manage_tags")), f"Telegram {g} (members): bot ma prawo Manage tags (tagi Verified)",
+                "nadaj botowi 'Manage tags' w tej grupie")
     return ok
 
 

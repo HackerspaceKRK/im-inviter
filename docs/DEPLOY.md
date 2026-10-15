@@ -13,7 +13,7 @@ potem tabela różnic.
 | konto bota Matrix | `@…:…` | `@…:…` |
 | `MATRIX_ROOMS` (ID pokoi) | `!…:…` | `!…:…` |
 | bot Telegrama (BotFather) | `@…bot` | `@…bot` |
-| `TELEGRAM_GROUPS` | `-100…` | `-100…` |
+| `TELEGRAM_MEMBERS_GROUPS` / `TELEGRAM_PUBLIC_GROUPS` / `TELEGRAM_CHANNELS` | `-100…` | `-100…` |
 | host z dockerem | … | … |
 
 Szablony `.env`: `env/hskrk.env.example`, `env/hswro.env.example`.
@@ -109,20 +109,26 @@ Bot może zapraszać do **przestrzeni** zamiast (albo obok) pojedynczych pokoi: 
 2. Dodaj bota do grup jako **administratora z prawem „Invite users"**.
 3. ID grup (`-100…`): np. dodaj tymczasowo `@RawDataBot` do grupy albo `getUpdates` botem po wiadomości w grupie
    (uwaga: gdy bot działa, `getUpdates` daje błąd 409 — zatrzymaj go na chwilę).
-4. **Wiele grup:** `TELEGRAM_GROUPS=-100111,-100222,-100333` (po przecinku), bot musi być adminem z „Invite users"
-   w każdej. Zmiana `.env` wymaga restartu bota; `python -m bot.preflight` sprawdza każdą grupę osobno.
+4. **Role czatów (od 2026-10-15):** czaty są rozdzielone w envach według roli, ID po przecinku:
+   - `TELEGRAM_MEMBERS_GROUPS`: grupa dla członków. Linki, komendy i **tagi** (Verified / Verified*); bot potrzebuje „Invite users" i „Manage tags",
+   - `TELEGRAM_PUBLIC_GROUPS`: grupa publiczna. Linki i komendy, **bez tagów**,
+   - `TELEGRAM_CHANNELS`: kanały. Tylko linki.
+
+   Ten sam czat w dwóch listach to błąd przy starcie. Stara `TELEGRAM_GROUPS` działa jeszcze jako „publiczna" (linki i komendy, **bez tagów**)
+   z ostrzeżeniem w logu; czat wpisany już w nową listę jest w starej ignorowany, więc migrację można robić stopniowo. Bot musi być adminem
+   z „Invite users" w każdym czacie. Zmiana `.env` wymaga restartu bota; `python -m bot.preflight` sprawdza każdą grupę osobno.
    Po weryfikacji user dostaje w jednym DM „• Nazwa grupy: link" (jednorazowe, 24 h). Grupa, której link się nie
    wygeneruje, nie blokuje reszty — user dostaje jej nazwę na liście „Nie udało się wygenerować linku do: …".
 5. **`/grupy`** (w prywatnej rozmowie z botem, tylko dla połączonych userów): świeże linki do wszystkich grup. Dzięki
    temu dodanie grupy później nie wymaga niczego od admina, a wygasły/zużyty link da się odnowić.
-6. **Komendy na grupie:** `/start` i `/grupy` (także w formie `/grupy@nazwabota`) wysłane na grupie z `TELEGRAM_GROUPS` bot odpowiada
+6. **Komendy na grupie:** `/start` i `/grupy` (także w formie `/grupy@nazwabota`) wysłane na grupie z konfiguracji (members lub publicznej) bot odpowiada
    krótką instrukcją, że komendy działają tylko w prywatnej rozmowie, co robi `/start` (łączy konto z Authentikiem) i co
    robi `/grupy` (świeże linki). W DM-ach, gdzie user ma coś wpisać (brak dopasowania przy `/start`, niepołączone konto
    przy `/grupy`), bot dokleja adres ustawień: `AUTHENTIK_URL` + `/if/user/#/settings`. Telegram w grupach z włączonym
    „privacy mode" dostarcza botowi tylko komendy zaadresowane wprost (`/grupy@nazwabota`) albo wysłane zaraz po jego
    wiadomości, więc zwykłe `/grupy` bywa w ogóle niewidoczne dla bota — to ograniczenie Telegrama (admin grupy tego nie omija
    bez wyłączenia privacy mode w BotFatherze: `/setprivacy`).
-   **Na grupach spoza `TELEGRAM_GROUPS` bot milczy** (nie odpowiada instrukcją), więc dodanie go do losowej grupy
+   **Na grupach spoza konfiguracji bot milczy** (nie odpowiada instrukcją), więc dodanie go do losowej grupy
    niczego nie zdradza ani nie robi hałasu. (Nie wychodzi z niej sam; w razie potrzeby wyrzuć go ręcznie.)
 
 ## 5. Wdrożenie na hoście
@@ -214,7 +220,7 @@ je zaprosić. Konta połączone przez bota przed tą zmianą (mają `telegramSta
 
 ## Tag „Verified” na grupach Telegrama
 
-Bot ustawia zwykłym członkom grup z `TELEGRAM_GROUPS` (tylko tych) tag, domyślnie `Verified` (zmiana/wyłączenie: `TELEGRAM_MEMBER_TAG`, puste =
+Bot ustawia zwykłym członkom grup z **`TELEGRAM_MEMBERS_GROUPS`** (tylko tych; w grupach publicznych i na kanałach nie) tag, domyślnie `Verified` (zmiana/wyłączenie: `TELEGRAM_MEMBER_TAG`, puste =
 wyłączone, max 16 znaków, bez emoji). **Zweryfikowane** = każde ID z `telegramIDs` jakiegoś usera. Uznajemy je za właściwe, niezależnie od
 tego, czy dodał je admin w usermanagerze, czy bot po weryfikacji (decyzja 2026-10-15). Kontakt konta z botem (`telegramReachableIDs`) mówi tylko,
 czy bot może do niego napisać (potrzebne do wysyłki linków), a nie czy ID jest czyje.
@@ -226,7 +232,7 @@ sprawdzane ponownie najwcześniej po 6 h. Przy kilkuset kontach pierwszy dosyp t
 
 **`/verify` (tylko w prywatnej rozmowie z botem).** Potwierdza konto, które admin lub bot już przypisał userowi w Authentiku: zapisuje ślad
 kontaktu (`telegramReachableIDs`, czyli bot może do Ciebie pisać) i od razu nadaje tag na grupach (tag dostałoby i bez tego). Nie otwiera procedury `/start` i nie wysyła linków (od tego są `/start`
-i `/grupy`); gdy bot nie zna konta, podpowiada, co zrobić (wpisać @username w ustawieniach i wysłać `/start`). Użyte na grupie z `TELEGRAM_GROUPS`
+i `/grupy`); gdy bot nie zna konta, podpowiada, co zrobić (wpisać @username w ustawieniach i wysłać `/start`). Użyte na grupie z konfiguracji
 bot odsyła krótką instrukcję „pisz na priv" (jak przy `/start` i `/grupy`), niczego nie zapisuje.
 
 **Dopisek dla wygasłego członkostwa („Verified*").** Gdy konto usera jest nieaktywne w Authentiku albo jego `membershipExpirationTimestamp`
@@ -236,9 +242,9 @@ grupie, więc zmianę (wygaśnięcie, odnowienie) wykrywa z danych z Authentika 
 dodatkowych zapytań dla niezmienionych kont. **Tagu ustawionego ręcznie przez admina grupy (innego niż `Verified`/`Verified*`) bot nie
 nadpisuje.** Kto wygasa w trakcie dnia, dostaje gwiazdkę przy najbliższym przebiegu bota (kilka minut).
 
-**Przegląd czatów.** Przy starcie i potem co godzinę bot sprawdza każdy czat z `TELEGRAM_GROUPS`: tagi nadaje tylko w **grupach i
-supergrupach, w których jest adminem z prawem Manage tags**. **Kanały** są pomijane (Telegram: `setChatMemberTag` działa tylko w grupach i
-supergrupach; linki do kanałów z `/grupy` dalej działają). W logu jest po jednej linii na pominięty czat z powodem i podsumowanie
+**Przegląd czatów.** Przy starcie i potem co godzinę bot sprawdza każdy czat z `TELEGRAM_MEMBERS_GROUPS` (publicznych i kanałów nie rusza): tagi nadaje tylko w **grupach i
+supergrupach, w których jest adminem z prawem Manage tags**. Gdyby na liście members trafił kanał, zostanie pominięty (Telegram: `setChatMemberTag`
+działa tylko w grupach i supergrupach). W logu jest po jednej linii na pominięty czat z powodem i podsumowanie
 `przegląd czatów: tagi „Verified” w N z M czatów: …`. Prawo przyznane później bot zauważy przy najbliższym przeglądzie (do godziny).
 
 **Wiadomość na grupie jako wyzwalacz.** Gdy ktoś z ID w `telegramIDs` napisze na grupie, w której tagujemy, bot nadaje mu tag (jeśli tej pary

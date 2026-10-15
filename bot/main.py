@@ -12,7 +12,7 @@ from .authentik import Authentik
 from .matrix_sync import Matrix, run_matrix_cycle
 from .migrate import INVENTORY_EVERY, run_migration
 from .state import State
-from .telegram_sync import TelegramLogic
+from .telegram_sync import TelegramLogic, parse_tg_chats
 
 log = logging.getLogger("main")
 
@@ -42,7 +42,12 @@ async def amain(dry_run: bool, once: bool, audit: bool = False) -> None:
         from telegram.ext import (Application, CallbackQueryHandler, ChatMemberHandler, CommandHandler, MessageHandler,
                                   filters)
 
-        groups = [int(g) for g in _csv("TELEGRAM_GROUPS")]
+        chats = parse_tg_chats(os.environ)
+        log.info("Telegram: grupy members=%s (tagi), grupy publiczne=%s, kanały=%s", chats.members or "brak",
+                 chats.public or "brak", chats.channels or "brak")
+        if chats.legacy:
+            log.warning("TELEGRAM_GROUPS jest przestarzałe (czaty %s traktuję jak publiczne: linki i komendy, BEZ tagów). "
+                        "Przenieś je do TELEGRAM_MEMBERS_GROUPS / TELEGRAM_PUBLIC_GROUPS / TELEGRAM_CHANNELS.", chats.legacy)
         settings_url = os.environ["AUTHENTIK_URL"].rstrip("/") + "/if/user/#/settings"
         # Tag „Verified” przy nicku na grupach (puste TELEGRAM_MEMBER_TAG wyłącza). Max 16 znaków, bez emoji.
         member_tag = os.environ.get("TELEGRAM_MEMBER_TAG", "Verified")
@@ -54,8 +59,8 @@ async def amain(dry_run: bool, once: bool, audit: bool = False) -> None:
         if len((member_tag + suffix).strip()) > 16:
             log.error("TELEGRAM_MEMBER_TAG + TELEGRAM_EXPIRED_TAG_SUFFIX ma ponad 16 znaków: dopisek wyłączony")
             suffix = ""
-        tg_logic = TelegramLogic(authentik, state, groups, settings_url=settings_url, member_tag=member_tag,
-                                 expired_suffix=suffix)
+        tg_logic = TelegramLogic(authentik, state, chats.all, settings_url=settings_url, member_tag=member_tag,
+                                 expired_suffix=suffix, tag_groups=chats.tag)
         tg_app = Application.builder().token(os.environ["TELEGRAM_TOKEN"]).build()
         tg_logic.bot = tg_app.bot
         tg_app.add_handler(CommandHandler("start", tg_logic.on_start))

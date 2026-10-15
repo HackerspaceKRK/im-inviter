@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
 
 from .handles import append_tg_id, find_pending_tg_users, normalize_tg_ids, normalize_tg_username
@@ -46,6 +47,54 @@ TAG_GAP_S = 0.5  # przerwa między zapytaniami do Telegrama
 TAG_RECHECK_S = 6 * 3600  # jak często sprawdzamy ponownie konto, którego nie było w grupie
 VERIFIED_CACHE_TTL_S = 60  # lista zweryfikowanych ID z Authentika odświeżana najwyżej raz na tyle (nie przy każdej wiadomości)
 CHAT_REVIEW_EVERY_S = 3600  # jak często powtarzamy przegląd grup (typ czatu i prawo tagowania bota)
+
+
+@dataclass
+class TgChats:
+    """Czaty Telegrama z konfiguracji, rozdzielone rolą (dzięki temu wiadomo, co jest co):
+    - `members`: grupa dla członków. Linki, komendy i **tagi** (Verified / Verified*),
+    - `public`: grupa publiczna. Linki i komendy, **bez tagów**,
+    - `channels`: kanały. Tylko linki (na kanałach nie ma tagów członków),
+    - `legacy`: stara zmienna TELEGRAM_GROUPS: jak `public` (bez tagów), do czasu przejścia na nowe zmienne."""
+    members: List[int]
+    public: List[int]
+    channels: List[int]
+    legacy: List[int]
+
+    @property
+    def all(self) -> List[int]:
+        """Wszystkie czaty (linki z /grupy, komendy na grupach), w stałej kolejności: members, public, channels, legacy."""
+        return list(dict.fromkeys(self.members + self.public + self.channels + self.legacy))
+
+    @property
+    def tag(self) -> List[int]:
+        return list(self.members)
+
+
+def parse_tg_chats(env: Any) -> TgChats:
+    """Czyta TELEGRAM_MEMBERS_GROUPS, TELEGRAM_PUBLIC_GROUPS, TELEGRAM_CHANNELS (i starą TELEGRAM_GROUPS). Ten sam czat
+    w dwóch listach to błąd konfiguracji (nie zgadujemy, czy ma dostawać tagi)."""
+    def ids(name: str) -> List[int]:
+        out = []
+        for part in (env.get(name) or "").split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                out.append(int(part))
+            except ValueError:
+                raise ValueError(f"{name}: „{part}” nie jest numerycznym ID czatu (np. -1001234567890)") from None
+        return out
+    members, public, channels = ids("TELEGRAM_MEMBERS_GROUPS"), ids("TELEGRAM_PUBLIC_GROUPS"), ids("TELEGRAM_CHANNELS")
+    seen: dict = {}
+    for role, lst in (("TELEGRAM_MEMBERS_GROUPS", members), ("TELEGRAM_PUBLIC_GROUPS", public), ("TELEGRAM_CHANNELS", channels)):
+        for c in lst:
+            if c in seen and seen[c] != role:
+                raise ValueError(f"czat {c} jest jednocześnie w {seen[c]} i {role}: wybierz jedną rolę")
+            seen[c] = role
+    # stara zmienna: czat już przeniesiony do nowej listy jest pomijany (migracja bez kasowania starej od razu)
+    legacy = [c for c in ids("TELEGRAM_GROUPS") if c not in seen]
+    return TgChats(members=members, public=public, channels=channels, legacy=legacy)
 
 
 def _tg_req_key(req: dict) -> tuple:
@@ -105,7 +154,7 @@ def clear_matching_username(attrs: dict, tg_username: Optional[str]) -> None:
 
 class TelegramLogic:
     def __init__(self, authentik: Any, state: Any, groups: List[int], bot: Any = None,
-                 settings_url: str = "", member_tag: str = "", expired_suffix: str = ""):
+                 settings_url: str = "", member_tag: str = "", expired_suffix: str = "", tag_groups: Optional[List[int]] = None):
         self.authentik = authentik
         self._verified_cache: Optional[Tuple[float, dict]] = None  # (monotonic, ID -> tag)
         # Grupy z TELEGRAM_GROUPS, w których tagowanie ma sens (przegląd `review_chats`); None = jeszcze nie sprawdzono
@@ -117,7 +166,9 @@ class TelegramLogic:
         self.member_tag = member_tag.strip()  # np. „Verified”; pusty = bot nie ustawia tagów
         self._tag_warned: set = set()  # (grupa, błąd): ten sam problem logujemy raz, nie przy każdym kontakcie
         self.state = state
-        self.groups = groups
+        self.groups = groups  # wszystkie czaty (linki, komendy na grupach)
+        # czaty, w których tagujemy (grupa members); None = wszystkie z `groups` (tylko testy, produkcja przekazuje listę)
+        self.tag_groups = tag_groups
         self.bot = bot  # telegram.Bot, ustawiany po zbudowaniu Application
         self.settings_url = settings_url  # np. https://auth.example.com/if/user/#/settings
 
@@ -220,18 +271,22 @@ class TelegramLogic:
         await self.tag_verified(tg_id)
 
     def _tag_targets(self) -> List[int]:
-        return list(self.groups) if self.tag_chats is None else list(self.tag_chats)
+        """Gdzie tagujemy: wynik przeglądu, a przed pierwszym przeglądem lista z konfiguracji (TELEGRAM_MEMBERS_GROUPS)."""
+        if self.tag_chats is not None:
+            return list(self.tag_chats)
+        return list(self.groups if self.tag_groups is None else self.tag_groups)
 
     async def review_chats(self) -> None:
-        """Przegląd czatów z TELEGRAM_GROUPS pod kątem tagów: tylko grupy i supergrupy (na kanałach `setChatMemberTag` nie działa),
+        """Przegląd czatów z TELEGRAM_MEMBERS_GROUPS pod kątem tagów: tylko grupy i supergrupy (na kanałach `setChatMemberTag` nie działa),
         w których bot jest adminem z prawem `can_manage_tags`. Reszta jest pomijana z jednym wpisem w logu mówiącym dlaczego.
         Linki do grup/kanałów (`/grupy`) dalej idą do wszystkich czatów z konfiguracji."""
-        if not (self.bot and self.groups):
+        configured = list(self.groups if self.tag_groups is None else self.tag_groups)
+        if not (self.bot and configured):
             return
         if self._me_id is None:
             self._me_id = (await self.bot.get_me()).id
         ok: List[int] = []
-        for chat in self.groups:
+        for chat in configured:
             try:
                 info = await self.bot.get_chat(chat)
                 name = f"{getattr(info, 'title', None) or chat} ({chat})"
@@ -251,7 +306,7 @@ class TelegramLogic:
             except Exception as e:
                 log.warning("przegląd czatów: nie udało się sprawdzić %s: %s", chat, e)
         self.tag_chats = ok
-        log.info("przegląd czatów: tagi „%s” w %d z %d czatów z TELEGRAM_GROUPS: %s", self.member_tag, len(ok), len(self.groups),
+        log.info("przegląd czatów: tagi „%s” w %d z %d czatów z TELEGRAM_MEMBERS_GROUPS: %s", self.member_tag, len(ok), len(configured),
                  ", ".join(str(c) for c in ok) or "brak")
 
     async def maybe_review_chats(self) -> None:

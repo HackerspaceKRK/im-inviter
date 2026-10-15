@@ -1516,3 +1516,56 @@ def test_old_state_databases_get_the_tag_column(tmp_path):
     assert st.tag_pair_due(-1, 11, want="Verified")                                 # stary wpis nie zna tagu: sprawdzamy raz jeszcze
     st.set_tag_pair(-1, 11, True, tag="Verified")
     assert not st.tag_pair_due(-1, 11, want="Verified") and st.tag_pair_due(-1, 11, want="Verified*")
+
+
+# ---------- role czatów: members (tagi) / publiczne / kanały ----------
+def test_chat_roles_are_parsed_and_only_members_groups_are_tagged():
+    from bot.telegram_sync import parse_tg_chats
+    chats = parse_tg_chats({"TELEGRAM_MEMBERS_GROUPS": "-1, -2", "TELEGRAM_PUBLIC_GROUPS": "-3", "TELEGRAM_CHANNELS": "-4,-5"})
+    assert chats.members == [-1, -2] and chats.public == [-3] and chats.channels == [-4, -5] and chats.legacy == []
+    assert chats.all == [-1, -2, -3, -4, -5] and chats.tag == [-1, -2]                  # linki do wszystkich, tagi tylko members
+    assert parse_tg_chats({}).all == []
+
+
+def test_a_chat_in_two_roles_or_a_bad_id_is_a_configuration_error():
+    from bot.telegram_sync import parse_tg_chats
+    with pytest.raises(ValueError, match="-1 jest jednocześnie w TELEGRAM_MEMBERS_GROUPS i TELEGRAM_PUBLIC_GROUPS"):
+        parse_tg_chats({"TELEGRAM_MEMBERS_GROUPS": "-1", "TELEGRAM_PUBLIC_GROUPS": "-1"})
+    with pytest.raises(ValueError, match="TELEGRAM_CHANNELS: „abc”"):
+        parse_tg_chats({"TELEGRAM_CHANNELS": "abc"})
+    # migracja: czat już w nowej liście i jeszcze w starej TELEGRAM_GROUPS to nie błąd, stary wpis jest ignorowany
+    migrated = parse_tg_chats({"TELEGRAM_MEMBERS_GROUPS": "-1", "TELEGRAM_GROUPS": "-1,-9"})
+    assert migrated.members == [-1] and migrated.legacy == [-9] and migrated.tag == [-1]
+
+
+def test_tags_are_set_only_in_the_members_group_but_links_go_to_every_chat():
+    from bot.telegram_sync import parse_tg_chats
+    chats = parse_tg_chats({"TELEGRAM_MEMBERS_GROUPS": "-1", "TELEGRAM_PUBLIC_GROUPS": "-2", "TELEGRAM_CHANNELS": "-3"})
+    bot = TagBot({(-1, 99): {"status": "member"}, (-2, 99): {"status": "member"}})
+    az = FakeAuthentik([tg_user(1, telegramIDs=["99"])])
+    logic = TelegramLogic(az, State(), chats.all, bot, member_tag="Verified", tag_groups=chats.tag)
+    run(logic.tag_verified(99))
+    run(logic.on_group_message(_group_msg(99, chat=-2), None))                         # wiadomość w grupie publicznej
+    run(logic.backfill_tags(budget=10))
+    assert [c[1]["chat_id"] for c in bot.tags()] == [-1]                                # tag tylko w grupie members
+    assert all(c[1]["chat_id"] == -1 for c in bot.api_calls)                            # publicznej i kanału nie pytamy o nic
+    n = run(logic.send_group_links(99))                                                 # a linki: wszystkie 3 czaty
+    assert n == 3
+
+
+def test_review_looks_only_at_members_groups():
+    ME = ReviewBot.ME
+    bot = ReviewBot({(-1, ME): {"status": "administrator", "can_manage_tags": True}}, {-1: ("supergroup", "Members")})
+    logic = TelegramLogic(FakeAuthentik([]), State(), [-1, -2, -3], bot, member_tag="Verified", tag_groups=[-1])
+    run(logic.review_chats())                                                           # -2/-3 (publiczna/kanał) nie są sprawdzane
+    assert logic.tag_chats == [-1]
+
+
+def test_legacy_telegram_groups_variable_means_links_without_tags():
+    from bot.telegram_sync import parse_tg_chats
+    chats = parse_tg_chats({"TELEGRAM_GROUPS": "-7"})
+    bot = TagBot({(-7, 99): {"status": "member"}})
+    az = FakeAuthentik([tg_user(1, telegramIDs=["99"])])
+    logic = TelegramLogic(az, State(), chats.all, bot, member_tag="Verified", tag_groups=chats.tag)
+    run(logic.tag_verified(99))
+    assert chats.all == [-7] and bot.api_calls == []                                    # linki tak, tagi nie
