@@ -68,12 +68,10 @@ def add_reachable_id(attrs: dict, tg_id) -> None:
 
 
 def verified_tg_ids(attrs: dict) -> set:
-    """ID zweryfikowane: konto napisało do bota (`telegramReachableIDs`). Gdy tego atrybutu nie ma, a user ma `telegramStatus` = ok,
-    został połączony przez bota, zanim ślad istniał: wtedy wszystkie jego ID (ta sama reguła co w usermanagerze)."""
-    owned = user_tg_ids(attrs)
-    if attrs.get("telegramReachableIDs") is not None:
-        return owned & set(normalize_tg_ids(attrs.get("telegramReachableIDs")))
-    return owned if str(attrs.get("telegramStatus") or "").strip() == "ok" else set()
+    """ID uznawane za zweryfikowane: każde ID z `telegramIDs`. Przypisał je admin (usermanager) albo bot po weryfikacji, więc
+    uznajemy je za właściwe (decyzja 2026-10-15); brak kontaktu z botem (`telegramReachableIDs`) mówi tylko, czy bot może do
+    konta napisać, a nie czy ID jest czyje."""
+    return user_tg_ids(attrs)
 
 
 def user_tg_ids(attrs: dict) -> set:

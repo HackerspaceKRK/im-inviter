@@ -1179,13 +1179,14 @@ def test_verified_account_gets_the_tag_only_as_a_plain_member():
     assert bot.tags() == [("setChatMemberTag", {"chat_id": -1, "user_id": 99, "tag": "Verified"})]   # nie admin, nie już otagowany, nie spoza grupy
 
 
-def test_account_without_a_trace_of_contact_is_not_tagged_and_not_even_queried():
+def test_every_id_assigned_in_authentik_is_tagged_even_without_any_contact_with_the_bot():
     bot = TagBot({(-1, 99): {"status": "member"}})
-    az = FakeAuthentik([tg_user(1, telegramIDs=["99"])])                          # ID wpisane ręcznie, konto nie pisało do bota
-    assert run(TelegramLogic(az, State(), [-1], bot, member_tag="Verified").tag_verified(99)) == 0
-    assert bot.api_calls == []
-    assert run(TelegramLogic(az, State(), [-1], bot, member_tag="Verified").tag_verified(555)) == 0   # ID nieprzypisane nikomu
-    assert bot.api_calls == []
+    az = FakeAuthentik([tg_user(1, telegramIDs=["99"])])                          # ID wpisane ręcznie przez admina: uznane za właściwe
+    assert run(TelegramLogic(az, State(), [-1], bot, member_tag="Verified").tag_verified(99)) == 1
+    assert len(bot.tags()) == 1
+    bot2 = TagBot({(-1, 555): {"status": "member"}})
+    assert run(TelegramLogic(az, State(), [-1], bot2, member_tag="Verified").tag_verified(555)) == 0   # ID nieprzypisane nikomu
+    assert bot2.api_calls == []
 
 
 def test_first_message_to_the_bot_from_a_manual_id_marks_it_and_tags_it():
@@ -1242,24 +1243,22 @@ def _no_tag_gap(monkeypatch):
     monkeypatch.setattr(ts, "TAG_GAP_S", 0)
 
 
-def test_verified_ids_rule_covers_accounts_linked_before_the_contact_trace_existed():
+def test_verified_ids_are_all_ids_of_a_user_regardless_of_contact_with_the_bot():
     from bot.telegram_sync import verified_tg_ids
-    assert verified_tg_ids({"telegramIDs": ["1", "2"], "telegramReachableIDs": ["2"]}) == {"2"}           # jest ślad: tylko on
-    assert verified_tg_ids({"telegramIDs": ["1", "2"], "telegramStatus": "ok"}) == {"1", "2"}             # stary user połączony przez bota
-    assert verified_tg_ids({"telegramIDs": ["1"]}) == set()                                               # wpisane ręcznie, bez kontaktu
-    assert verified_tg_ids({"telegramIDs": ["1"], "telegramStatus": "zły lub wygasły kod"}) == set()      # błąd to nie weryfikacja
-    assert verified_tg_ids({"telegramIDs": ["1"], "telegramReachableIDs": [], "telegramStatus": "ok"}) == set()  # lista jest, pusta
+    assert verified_tg_ids({"telegramIDs": ["1", "2"], "telegramReachableIDs": ["2"]}) == {"1", "2"}
+    assert verified_tg_ids({"telegramIDs": "1, 2"}) == {"1", "2"}                                         # tekst "1, 2" też
+    assert verified_tg_ids({"telegramReachableIDs": ["9"]}) == set()                                      # ślad bez przypisanego ID nic nie daje
+    assert verified_tg_ids({}) == set()
 
 
 def test_backfill_tags_already_linked_accounts_within_budget_and_never_twice():
-    members = {(-1, 11): {"status": "member"}, (-1, 22): {"status": "member"}, (-1, 33): {"status": "member"},
-               (-1, 44): {"status": "member"}}
+    members = {(-1, i): {"status": "member"} for i in (11, 22, 33, 44)}
     bot = TagBot(members)
     az = FakeAuthentik([
-        tg_user(1, telegramIDs=["11"], telegramStatus="ok"),                    # połączony przed istnieniem śladu
+        tg_user(1, telegramIDs=["11"], telegramStatus="ok"),                    # połączony przez bota
         tg_user(2, telegramIDs=["22"], telegramReachableIDs=["22"]),
-        tg_user(3, telegramIDs=["33"], telegramStatus="ok"),
-        tg_user(4, telegramIDs=["44"]),                                         # ręczne ID bez kontaktu: nie ruszamy
+        tg_user(3, telegramIDs=["33"]),                                         # wpisany przez admina
+        tg_user(4),                                                             # user bez ID: nic do zrobienia
     ])
     logic = TelegramLogic(az, State(), [-1], bot, member_tag="Verified")
     assert run(logic.backfill_tags(budget=2)) == 2                              # budżet na przebieg
@@ -1269,7 +1268,6 @@ def test_backfill_tags_already_linked_accounts_within_budget_and_never_twice():
     before = len(bot.api_calls)
     assert run(logic.backfill_tags(budget=10)) == 0                             # wszystko załatwione: zero zapytań
     assert len(bot.api_calls) == before
-    assert (-1, 44) not in [(c[1]["chat_id"], c[1]["user_id"]) for c in bot.api_calls]
 
 
 def test_backfill_rechecks_a_account_outside_the_group_only_after_a_while():
@@ -1310,15 +1308,14 @@ def _group_msg(user_id=99, chat=-1, message_id=5, is_bot=False, sender_chat=None
               effective_message=NS(message_id=message_id, sender_chat=sender_chat))
 
 
-def test_unverified_member_gets_a_reaction_once_per_cooldown_and_verified_gets_the_tag():
+def test_unknown_member_gets_a_reaction_once_per_cooldown_and_known_gets_the_tag():
     bot = ReactBot({(-1, 11): {"status": "member"}, (-1, 99): {"status": "member"}})
-    az = FakeAuthentik([tg_user(1, telegramIDs=["11"], telegramReachableIDs=["11"]),
-                        tg_user(2, telegramIDs=["99"])])                       # 99: wpisany ręcznie, nie pisał do bota
+    az = FakeAuthentik([tg_user(1, telegramIDs=["11"])])                        # 99 nie ma w Authentiku
     logic = TelegramLogic(az, State(), [-1], bot, member_tag="Verified", unverified_reaction="🙏")
     run(logic.on_group_message(_group_msg(99, message_id=5), None))
     run(logic.on_group_message(_group_msg(99, message_id=6), None))            # drugi raz w oknie: cisza
     assert bot.reactions == [(-1, 5, "🙏")]
-    run(logic.on_group_message(_group_msg(11, message_id=7), None))            # zweryfikowany: tag, bez reakcji
+    run(logic.on_group_message(_group_msg(11, message_id=7), None))            # przypisany w Authentiku: tag, bez reakcji
     assert [c[1]["user_id"] for c in bot.tags()] == [11] and len(bot.reactions) == 1
     n = len(bot.api_calls)
     run(logic.on_group_message(_group_msg(11, message_id=8), None))            # para załatwiona: zero zapytań
@@ -1348,15 +1345,20 @@ def test_reaction_disabled_when_empty_and_errors_are_logged_once(caplog):
     assert sum("nie powiodła się" in r.getMessage() for r in caplog.records) == 1
 
 
-def test_fresh_verification_is_recognised_immediately_despite_the_cache():
+def test_account_added_to_authentik_is_recognised_after_the_cache_expires():
+    import bot.telegram_sync as ts
     bot = ReactBot({(-1, 99): {"status": "member"}})
-    az = FakeAuthentik([tg_user(1, telegramIDs=["99"])])
+    az = FakeAuthentik([])
     logic = TelegramLogic(az, State(), [-1], bot, member_tag="Verified", unverified_reaction="🙏")
-    run(logic.on_group_message(_group_msg(99, message_id=1), None))            # jeszcze niezweryfikowany: reakcja, cache wypełniony
-    run(logic.note_contact(99))                                                # pisze do bota: ślad + tag
+    run(logic.on_group_message(_group_msg(99, message_id=1), None))            # nieznany: reakcja, cache wypełniony
+    az.users.append(tg_user(1, telegramIDs=["99"]))                            # admin dodaje ID w usermanagerze
     logic._react_at.clear()
-    run(logic.on_group_message(_group_msg(99, message_id=2), None))            # teraz zweryfikowany: bez nowej reakcji
-    assert len(bot.reactions) == 1
+    run(logic.on_group_message(_group_msg(99, message_id=2), None))            # cache jeszcze świeży: znów reakcja
+    assert len(bot.reactions) == 2
+    logic._verified_cache = (logic._verified_cache[0] - ts.VERIFIED_CACHE_TTL_S - 1, logic._verified_cache[1])
+    logic._react_at.clear()
+    run(logic.on_group_message(_group_msg(99, message_id=3), None))            # cache wygasł: rozpoznany, tag zamiast reakcji
+    assert len(bot.reactions) == 2 and len(bot.tags()) == 1
 
 
 # ---------- /verify (tylko prywatnie) ----------
