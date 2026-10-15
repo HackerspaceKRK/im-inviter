@@ -217,9 +217,11 @@ class TelegramLogic:
         done = 0
         for chat in self.groups:
             try:
-                member = await self.bot.do_api_request("getChatMember", api_kwargs={"chat_id": chat, "user_id": tg_id})
+                member = await self.bot.get_chat_member(chat, tg_id)
+                # `tag` w wersji 21 biblioteki nie jest jeszcze polem obiektu: ląduje w api_kwargs
+                current = getattr(member, "tag", None) or (getattr(member, "api_kwargs", None) or {}).get("tag")
                 # tylko zwykli członkowie (admini mają custom_title, a spoza grupy nie ma komu nadać tagu)
-                if member.get("status") not in ("member", "restricted") or member.get("tag") == self.member_tag:
+                if member.status not in ("member", "restricted") or current == self.member_tag:
                     continue
                 await self.bot.do_api_request(
                     "setChatMemberTag", api_kwargs={"chat_id": chat, "user_id": tg_id, "tag": self.member_tag})

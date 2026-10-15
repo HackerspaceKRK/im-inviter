@@ -1146,14 +1146,21 @@ class TagBot(FakeTgBot):
         super().__init__()
         self.members, self.broken, self.api_calls = members, set(broken), []   # members[(chat, user)] = {"status", "tag"?}
 
+    async def get_chat_member(self, chat, user):
+        from types import SimpleNamespace
+        self.api_calls.append(("getChatMember", {"chat_id": chat, "user_id": user}))
+        if chat in self.broken:
+            raise RuntimeError("Bad Request: not enough rights")
+        m = self.members.get((chat, user), {"status": "left"})
+        # jak PTB 21: pole `tag` nie jest atrybutem, tylko trafia do api_kwargs
+        return SimpleNamespace(status=m["status"], api_kwargs={"tag": m["tag"]} if "tag" in m else {})
+
     async def do_api_request(self, endpoint, api_kwargs=None, **kw):
+        assert endpoint == "setChatMemberTag"    # odczyt idzie przez get_chat_member (wrapper biblioteki)
         self.api_calls.append((endpoint, dict(api_kwargs or {})))
         chat, user = api_kwargs["chat_id"], api_kwargs["user_id"]
         if chat in self.broken:
             raise RuntimeError("Bad Request: not enough rights")
-        if endpoint == "getChatMember":
-            return dict(self.members.get((chat, user), {"status": "left"}))
-        assert endpoint == "setChatMemberTag"
         self.members[(chat, user)]["tag"] = api_kwargs["tag"]
         return True
 

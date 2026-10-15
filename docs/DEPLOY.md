@@ -221,7 +221,7 @@ do bota. Tag jest nadawany przy takim kontakcie i przy wejściu do grupy (zdarze
 
 **Wymaga w każdej grupie:** bot jako administrator z prawem **Manage tags** (`can_manage_tags`), oprócz „Invite users". Bez tego w logu
 pojawi się jedno ostrzeżenie na grupę, a reszta bota działa normalnie. Admini i właściciel grupy tagu nie dostają (mają własny „custom title").
-Biblioteka `python-telegram-bot` 21 nie ma jeszcze metody `setChatMemberTag`, więc bot woła surowe API (`do_api_request`).
+Biblioteka `python-telegram-bot` 21 nie ma jeszcze metody `setChatMemberTag`, więc bot woła ją surowo (`do_api_request`); odczyt członka idzie zwykłym `get_chat_member`.
 
 **Nie zdejmuje tagu:** gdy ID zniknie z `telegramIDs` albo user straci członkostwo, tag zostaje do ręcznego usunięcia (świadomie, bez cyklicznego
 przeglądu grup).
