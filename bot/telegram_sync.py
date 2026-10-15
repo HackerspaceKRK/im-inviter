@@ -44,6 +44,8 @@ def parse_tg_requests(value) -> List[dict]:
 TAG_BACKFILL_BUDGET = 20  # par (grupa, konto) sprawdzanych w jednym przebiegu
 TAG_GAP_S = 0.5  # przerwa między zapytaniami do Telegrama
 TAG_RECHECK_S = 6 * 3600  # jak często sprawdzamy ponownie konto, którego nie było w grupie
+VERIFIED_CACHE_TTL_S = 60  # lista zweryfikowanych ID z Authentika odświeżana najwyżej raz na tyle (nie przy każdej wiadomości)
+REACTION_COOLDOWN_S = 6 * 3600  # niezweryfikowany user dostaje reakcję najwyżej raz na tyle w danej grupie
 
 
 def _tg_req_key(req: dict) -> tuple:
@@ -105,8 +107,11 @@ def clear_matching_username(attrs: dict, tg_username: Optional[str]) -> None:
 
 class TelegramLogic:
     def __init__(self, authentik: Any, state: Any, groups: List[int], bot: Any = None,
-                 settings_url: str = "", member_tag: str = ""):
+                 settings_url: str = "", member_tag: str = "", unverified_reaction: str = ""):
         self.authentik = authentik
+        self.unverified_reaction = unverified_reaction.strip()  # emoji pod wiadomością niezweryfikowanego; puste = wyłączone
+        self._verified_cache: Optional[Tuple[float, set]] = None  # (monotonic, zbiór zweryfikowanych ID)
+        self._react_at: dict = {}  # (grupa, user) -> kiedy ostatnio zareagowaliśmy
         self.member_tag = member_tag.strip()  # np. „Verified”; pusty = bot nie ustawia tagów
         self._tag_warned: set = set()  # (grupa, błąd): ten sam problem logujemy raz, nie przy każdym kontakcie
         self.state = state
@@ -204,6 +209,7 @@ class TelegramLogic:
             owner = find_linked_user(users, tg_id)
             if owner is not None and str(tg_id) not in normalize_tg_ids(
                     (owner.get("attributes") or {}).get("telegramReachableIDs")):
+                self._verified_cache = None  # świeżo zweryfikowany ma być od razu poznany
                 await self.authentik.update_attributes(owner["pk"], mutate=lambda fresh: add_reachable_id(fresh, tg_id))
         except Exception:
             log.exception("nie udało się zapisać śladu kontaktu tg id=%s", tg_id)
@@ -278,6 +284,50 @@ class TelegramLogic:
                 if TAG_GAP_S:
                     await asyncio.sleep(TAG_GAP_S)
         return checked
+
+    async def _verified_set(self) -> set:
+        """Zweryfikowane ID Telegrama (patrz `verified_tg_ids`), z krótkim cache: grupa może pisać wiele wiadomości na minutę."""
+        now = time.monotonic()
+        if self._verified_cache and now - self._verified_cache[0] < VERIFIED_CACHE_TTL_S:
+            return self._verified_cache[1]
+        users = await self.authentik.list_users()
+        ids = {int(i) for u in users for i in verified_tg_ids(u.get("attributes") or {}) if i.isdigit()}
+        self._verified_cache = (now, ids)
+        return ids
+
+    async def on_group_message(self, update: Any, context: Any) -> None:
+        """Wiadomość na grupie z TELEGRAM_GROUPS: zweryfikowany dostaje tag (jeśli jeszcze go nie sprawdzaliśmy), niezweryfikowany
+        reakcję (np. 🙏) pod wiadomością, najwyżej raz na `REACTION_COOLDOWN_S` w danej grupie. Admini, boty i wiadomości
+        „w imieniu kanału/grupy” (anonimowi admini) są pomijani. Bot widzi wszystkie wiadomości tylko jako admin grupy."""
+        chat, user, msg = update.effective_chat, update.effective_user, update.effective_message
+        if (not self.bot or chat is None or chat.id not in self.groups or user is None or user.is_bot or msg is None
+                or getattr(msg, "sender_chat", None) is not None):
+            return
+        try:
+            if user.id in await self._verified_set():
+                if self.member_tag and self.state.tag_pair_due(chat.id, user.id, None, TAG_RECHECK_S):
+                    result = await self._tag_in_chat(chat.id, user.id)
+                    self.state.set_tag_pair(chat.id, user.id, result in ("set", "has"))
+                return
+            await self._nudge(chat.id, user.id, msg.message_id)
+        except Exception as e:
+            key = (chat.id, "msg", str(e))
+            if key not in self._tag_warned:
+                self._tag_warned.add(key)
+                log.warning("obsługa wiadomości na grupie %s nie powiodła się: %s", chat.id, e)
+
+    async def _nudge(self, chat: int, user: int, message_id: int) -> None:
+        if not self.unverified_reaction:
+            return
+        key, now = (chat, user), time.time()
+        if now - self._react_at.get(key, 0) < REACTION_COOLDOWN_S:
+            return
+        self._react_at[key] = now  # zapisujemy przed próbą: błąd nie ma wywołać serii ponowień przy kolejnych wiadomościach
+        member = await self.bot.get_chat_member(chat, user)
+        if member.status in ("administrator", "creator"):
+            return
+        await self.bot.set_message_reaction(chat, message_id, reaction=self.unverified_reaction)
+        log.info("reakcja %s pod wiadomością niezweryfikowanego tg id=%s grupa=%s", self.unverified_reaction, user, chat)
 
     async def on_chat_member(self, update: Any, context: Any) -> None:
         """Ktoś wszedł do grupy (np. z linku od bota po weryfikacji): nadaj tag, jeśli jest zweryfikowany."""

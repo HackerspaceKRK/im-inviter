@@ -39,7 +39,8 @@ async def amain(dry_run: bool, once: bool, audit: bool = False) -> None:
     tg_logic = None
     tg_app = None
     if os.environ.get("TELEGRAM_TOKEN") and not dry_run:
-        from telegram.ext import Application, CallbackQueryHandler, ChatMemberHandler, CommandHandler
+        from telegram.ext import (Application, CallbackQueryHandler, ChatMemberHandler, CommandHandler, MessageHandler,
+                                  filters)
 
         groups = [int(g) for g in _csv("TELEGRAM_GROUPS")]
         settings_url = os.environ["AUTHENTIK_URL"].rstrip("/") + "/if/user/#/settings"
@@ -48,13 +49,20 @@ async def amain(dry_run: bool, once: bool, audit: bool = False) -> None:
         if len(member_tag.strip()) > 16:  # limit Telegrama; dłuższy tag tylko generowałby błędy
             log.error("TELEGRAM_MEMBER_TAG ma ponad 16 znaków: tagi wyłączone")
             member_tag = ""
-        tg_logic = TelegramLogic(authentik, state, groups, settings_url=settings_url, member_tag=member_tag)
+        # Reakcja pod wiadomością niezweryfikowanego na grupie. Boty mogą używać tylko emoji z listy Telegrama (🥺 na niej nie ma);
+        # puste = wyłączone.
+        reaction = os.environ.get("TELEGRAM_UNVERIFIED_REACTION", "🙏")
+        tg_logic = TelegramLogic(authentik, state, groups, settings_url=settings_url, member_tag=member_tag,
+                                 unverified_reaction=reaction)
         tg_app = Application.builder().token(os.environ["TELEGRAM_TOKEN"]).build()
         tg_logic.bot = tg_app.bot
         tg_app.add_handler(CommandHandler("start", tg_logic.on_start))
         tg_app.add_handler(CommandHandler("grupy", tg_logic.on_groups))
         tg_app.add_handler(CallbackQueryHandler(tg_logic.on_button))
         tg_app.add_handler(ChatMemberHandler(tg_logic.on_chat_member, ChatMemberHandler.CHAT_MEMBER))
+        # group=1: działa obok komend (/start na grupie też jest wiadomością), nie zamiast nich
+        tg_app.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.UpdateType.MESSAGE & ~filters.StatusUpdate.ALL,
+                                          tg_logic.on_group_message), group=1)
         await tg_app.initialize()
         await tg_app.bot.set_my_commands([
             ("start", "Połącz konto z Authentikiem"),

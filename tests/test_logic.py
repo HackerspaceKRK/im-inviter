@@ -1290,3 +1290,70 @@ def test_tags_only_in_configured_groups():
     az = FakeAuthentik([tg_user(1, telegramIDs=["99"], telegramReachableIDs=["99"])])
     run(TelegramLogic(az, State(), [-1], bot, member_tag="Verified").tag_verified(99))
     assert [c[1]["chat_id"] for c in bot.tags()] == [-1]                        # grupa -9 spoza TELEGRAM_GROUPS nietknięta
+
+
+# ---------- wiadomość na grupie: tag dla zweryfikowanego, reakcja dla niezweryfikowanego ----------
+class ReactBot(TagBot):
+    def __init__(self, members, broken_reaction=False):
+        super().__init__(members)
+        self.reactions, self.broken_reaction = [], broken_reaction
+
+    async def set_message_reaction(self, chat_id, message_id, reaction=None, **kw):
+        if self.broken_reaction:
+            raise RuntimeError("Bad Request: REACTION_INVALID")
+        self.reactions.append((chat_id, message_id, reaction))
+
+
+def _group_msg(user_id=99, chat=-1, message_id=5, is_bot=False, sender_chat=None):
+    from types import SimpleNamespace as NS
+    return NS(effective_chat=NS(id=chat), effective_user=NS(id=user_id, is_bot=is_bot),
+              effective_message=NS(message_id=message_id, sender_chat=sender_chat))
+
+
+def test_unverified_member_gets_a_reaction_once_per_cooldown_and_verified_gets_the_tag():
+    bot = ReactBot({(-1, 11): {"status": "member"}, (-1, 99): {"status": "member"}})
+    az = FakeAuthentik([tg_user(1, telegramIDs=["11"], telegramReachableIDs=["11"]),
+                        tg_user(2, telegramIDs=["99"])])                       # 99: wpisany ręcznie, nie pisał do bota
+    logic = TelegramLogic(az, State(), [-1], bot, member_tag="Verified", unverified_reaction="🙏")
+    run(logic.on_group_message(_group_msg(99, message_id=5), None))
+    run(logic.on_group_message(_group_msg(99, message_id=6), None))            # drugi raz w oknie: cisza
+    assert bot.reactions == [(-1, 5, "🙏")]
+    run(logic.on_group_message(_group_msg(11, message_id=7), None))            # zweryfikowany: tag, bez reakcji
+    assert [c[1]["user_id"] for c in bot.tags()] == [11] and len(bot.reactions) == 1
+    n = len(bot.api_calls)
+    run(logic.on_group_message(_group_msg(11, message_id=8), None))            # para załatwiona: zero zapytań
+    assert len(bot.api_calls) == n
+
+
+def test_message_trigger_ignores_bots_admins_anonymous_senders_and_other_chats():
+    bot = ReactBot({(-1, 50): {"status": "administrator"}})
+    logic = TelegramLogic(FakeAuthentik([]), State(), [-1], bot, member_tag="Verified", unverified_reaction="🙏")
+    run(logic.on_group_message(_group_msg(50), None))                          # admin: nie reagujemy
+    run(logic.on_group_message(_group_msg(60, is_bot=True), None))
+    run(logic.on_group_message(_group_msg(61, sender_chat=object()), None))    # w imieniu kanału/anonimowy admin
+    run(logic.on_group_message(_group_msg(62, chat=-9), None))                 # grupa spoza TELEGRAM_GROUPS
+    assert bot.reactions == []
+
+
+def test_reaction_disabled_when_empty_and_errors_are_logged_once(caplog):
+    bot = ReactBot({(-1, 99): {"status": "member"}})
+    logic = TelegramLogic(FakeAuthentik([]), State(), [-1], bot, unverified_reaction="")
+    run(logic.on_group_message(_group_msg(99), None))
+    assert bot.reactions == [] and bot.api_calls == []
+    bot2 = ReactBot({(-1, 98): {"status": "member"}, (-1, 99): {"status": "member"}}, broken_reaction=True)
+    logic2 = TelegramLogic(FakeAuthentik([]), State(), [-1], bot2, unverified_reaction="🥺")
+    with caplog.at_level("WARNING"):
+        run(logic2.on_group_message(_group_msg(98), None))                      # błąd Telegrama nie wywala handlera
+        run(logic2.on_group_message(_group_msg(99), None))
+    assert sum("nie powiodła się" in r.getMessage() for r in caplog.records) == 1
+
+
+def test_fresh_verification_is_recognised_immediately_despite_the_cache():
+    bot = ReactBot({(-1, 99): {"status": "member"}})
+    az = FakeAuthentik([tg_user(1, telegramIDs=["99"])])
+    logic = TelegramLogic(az, State(), [-1], bot, member_tag="Verified", unverified_reaction="🙏")
+    run(logic.on_group_message(_group_msg(99, message_id=1), None))            # jeszcze niezweryfikowany: reakcja, cache wypełniony
+    run(logic.note_contact(99))                                                # pisze do bota: ślad + tag
+    logic._react_at.clear()
+    run(logic.on_group_message(_group_msg(99, message_id=2), None))            # teraz zweryfikowany: bez nowej reakcji
+    assert len(bot.reactions) == 1

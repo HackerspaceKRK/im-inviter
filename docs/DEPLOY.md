@@ -225,6 +225,14 @@ ID wpisane ręcznie przez admina dostaje tag dopiero po pierwszej wiadomości do
 każdym przebiegu bot sprawdza do 20 par (grupa, konto), z przerwą 0,5 s, i pomija pary już załatwione. Konto, którego nie ma w grupie, jest
 sprawdzane ponownie najwcześniej po 6 h. Przy kilkuset kontach pierwszy dosyp trwa kilkanaście minut, potem dzieje się niemal nic.
 
+**Wiadomość na grupie jako wyzwalacz.** Gdy ktoś napisze na grupie z `TELEGRAM_GROUPS` (bot jako admin widzi wszystkie wiadomości):
+- **zweryfikowany** dostaje tag, jeśli tej pary (grupa, konto) jeszcze nie załatwiono (potem zero zapytań),
+- **niezweryfikowany** dostaje pod wiadomością reakcję (`TELEGRAM_UNVERIFIED_REACTION`, domyślnie 🙏, puste = wyłączone), najwyżej raz na 6 h
+  na usera w danej grupie. Reakcja jest zachętą, żeby napisać do bota i się zweryfikować. Admini, boty i anonimowi nadawcy są pomijani.
+  **Boty mogą reagować tylko emoji z listy Telegrama (73 sztuki); 🥺 na niej nie ma**, więc domyślnie 🙏. Jeśli grupa wyłączyła reakcje albo
+  ogranicza ich zestaw, w logu będzie jedno ostrzeżenie na grupę.
+- Lista zweryfikowanych ID jest czytana z Authentika najwyżej raz na minutę (nie przy każdej wiadomości).
+
 **Wymaga w każdej grupie:** bot jako administrator z prawem **Manage tags** (`can_manage_tags`), oprócz „Invite users". Bez tego w logu
 pojawi się jedno ostrzeżenie na grupę, a reszta bota działa normalnie. Admini i właściciel grupy tagu nie dostają (mają własny „custom title").
 Biblioteka `python-telegram-bot` 21 nie ma metody `setChatMemberTag`, więc bot woła ją surowo (`do_api_request`); odczyt członka idzie zwykłym
