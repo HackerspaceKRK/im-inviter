@@ -1155,7 +1155,8 @@ class TagBot(FakeTgBot):
             raise RuntimeError("Bad Request: not enough rights")
         m = self.members.get((chat, user), {"status": "left"})
         # jak PTB 21: pole `tag` nie jest atrybutem, tylko trafia do api_kwargs
-        return SimpleNamespace(status=m["status"], api_kwargs={"tag": m["tag"]} if "tag" in m else {})
+        kw = {k: m[k] for k in ("tag", "can_manage_tags") if k in m}
+        return SimpleNamespace(status=m["status"], api_kwargs=kw)
 
     async def do_api_request(self, endpoint, api_kwargs=None, **kw):
         assert endpoint == "setChatMemberTag"    # odczyt idzie przez get_chat_member (wrapper biblioteki)
@@ -1291,74 +1292,52 @@ def test_tags_only_in_configured_groups():
 
 
 # ---------- wiadomość na grupie: tag dla zweryfikowanego, reakcja dla niezweryfikowanego ----------
-class ReactBot(TagBot):
-    def __init__(self, members, broken_reaction=False):
-        super().__init__(members)
-        self.reactions, self.broken_reaction = [], broken_reaction
-
-    async def set_message_reaction(self, chat_id, message_id, reaction=None, **kw):
-        if self.broken_reaction:
-            raise RuntimeError("Bad Request: REACTION_INVALID")
-        self.reactions.append((chat_id, message_id, reaction))
-
-
 def _group_msg(user_id=99, chat=-1, message_id=5, is_bot=False, sender_chat=None):
     from types import SimpleNamespace as NS
     return NS(effective_chat=NS(id=chat), effective_user=NS(id=user_id, is_bot=is_bot),
               effective_message=NS(message_id=message_id, sender_chat=sender_chat))
 
 
-def test_unknown_member_gets_a_reaction_once_per_cooldown_and_known_gets_the_tag():
-    bot = ReactBot({(-1, 11): {"status": "member"}, (-1, 99): {"status": "member"}})
+def test_first_message_of_an_assigned_account_gets_the_tag_and_unknown_accounts_are_left_alone():
+    bot = TagBot({(-1, 11): {"status": "member"}, (-1, 99): {"status": "member"}})
     az = FakeAuthentik([tg_user(1, telegramIDs=["11"])])                        # 99 nie ma w Authentiku
-    logic = TelegramLogic(az, State(), [-1], bot, member_tag="Verified", unverified_reaction="🙏")
+    logic = TelegramLogic(az, State(), [-1], bot, member_tag="Verified")
     run(logic.on_group_message(_group_msg(99, message_id=5), None))
-    run(logic.on_group_message(_group_msg(99, message_id=6), None))            # drugi raz w oknie: cisza
-    assert bot.reactions == [(-1, 5, "🙏")]
-    run(logic.on_group_message(_group_msg(11, message_id=7), None))            # przypisany w Authentiku: tag, bez reakcji
-    assert [c[1]["user_id"] for c in bot.tags()] == [11] and len(bot.reactions) == 1
+    assert bot.api_calls == []                                                  # nieznany: żadnych zapytań do Telegrama
+    run(logic.on_group_message(_group_msg(11, message_id=7), None))
+    assert [c[1]["user_id"] for c in bot.tags()] == [11]
     n = len(bot.api_calls)
     run(logic.on_group_message(_group_msg(11, message_id=8), None))            # para załatwiona: zero zapytań
     assert len(bot.api_calls) == n
 
 
 def test_message_trigger_ignores_bots_admins_anonymous_senders_and_other_chats():
-    bot = ReactBot({(-1, 50): {"status": "administrator"}})
-    logic = TelegramLogic(FakeAuthentik([]), State(), [-1], bot, member_tag="Verified", unverified_reaction="🙏")
-    run(logic.on_group_message(_group_msg(50), None))                          # admin: nie reagujemy
+    bot = TagBot({(-1, 50): {"status": "administrator"}, (-1, 70): {"status": "member"}})
+    az = FakeAuthentik([tg_user(1, telegramIDs=["50"]), tg_user(2, telegramIDs=["60"]), tg_user(3, telegramIDs=["61"]),
+                        tg_user(4, telegramIDs=["62"])])
+    logic = TelegramLogic(az, State(), [-1], bot, member_tag="Verified")
+    run(logic.on_group_message(_group_msg(50), None))                          # admin: nie można mu ustawić tagu
     run(logic.on_group_message(_group_msg(60, is_bot=True), None))
     run(logic.on_group_message(_group_msg(61, sender_chat=object()), None))    # w imieniu kanału/anonimowy admin
     run(logic.on_group_message(_group_msg(62, chat=-9), None))                 # grupa spoza TELEGRAM_GROUPS
-    assert bot.reactions == []
+    assert bot.tags() == []
 
 
-def test_reaction_disabled_when_empty_and_errors_are_logged_once(caplog):
-    bot = ReactBot({(-1, 99): {"status": "member"}})
-    logic = TelegramLogic(FakeAuthentik([]), State(), [-1], bot, unverified_reaction="")
-    run(logic.on_group_message(_group_msg(99), None))
-    assert bot.reactions == [] and bot.api_calls == []
-    bot2 = ReactBot({(-1, 98): {"status": "member"}, (-1, 99): {"status": "member"}}, broken_reaction=True)
-    logic2 = TelegramLogic(FakeAuthentik([]), State(), [-1], bot2, unverified_reaction="🥺")
-    with caplog.at_level("WARNING"):
-        run(logic2.on_group_message(_group_msg(98), None))                      # błąd Telegrama nie wywala handlera
-        run(logic2.on_group_message(_group_msg(99), None))
-    assert sum("nie powiodła się" in r.getMessage() for r in caplog.records) == 1
+
 
 
 def test_account_added_to_authentik_is_recognised_after_the_cache_expires():
     import bot.telegram_sync as ts
-    bot = ReactBot({(-1, 99): {"status": "member"}})
+    bot = TagBot({(-1, 99): {"status": "member"}})
     az = FakeAuthentik([])
-    logic = TelegramLogic(az, State(), [-1], bot, member_tag="Verified", unverified_reaction="🙏")
-    run(logic.on_group_message(_group_msg(99, message_id=1), None))            # nieznany: reakcja, cache wypełniony
+    logic = TelegramLogic(az, State(), [-1], bot, member_tag="Verified")
+    run(logic.on_group_message(_group_msg(99, message_id=1), None))            # nieznany; cache wypełniony
     az.users.append(tg_user(1, telegramIDs=["99"]))                            # admin dodaje ID w usermanagerze
-    logic._react_at.clear()
-    run(logic.on_group_message(_group_msg(99, message_id=2), None))            # cache jeszcze świeży: znów reakcja
-    assert len(bot.reactions) == 2
+    run(logic.on_group_message(_group_msg(99, message_id=2), None))            # cache jeszcze świeży: nadal nieznany
+    assert bot.tags() == []
     logic._verified_cache = (logic._verified_cache[0] - ts.VERIFIED_CACHE_TTL_S - 1, logic._verified_cache[1])
-    logic._react_at.clear()
-    run(logic.on_group_message(_group_msg(99, message_id=3), None))            # cache wygasł: rozpoznany, tag zamiast reakcji
-    assert len(bot.reactions) == 2 and len(bot.tags()) == 1
+    run(logic.on_group_message(_group_msg(99, message_id=3), None))            # cache wygasł: rozpoznany, tag
+    assert len(bot.tags()) == 1
 
 
 # ---------- /verify (tylko prywatnie) ----------
@@ -1398,10 +1377,67 @@ def test_verify_in_a_group_only_points_to_the_private_chat_and_changes_nothing()
     assert sent2 == []
 
 
-def test_verify_command_on_a_group_does_not_also_trigger_the_unverified_reaction():
-    bot = ReactBot({(-1, 98): {"status": "member"}})
-    logic = TelegramLogic(FakeAuthentik([]), State(), [-1], bot, unverified_reaction="🙏")
-    update = _group_msg(98, message_id=3)
-    update.effective_message.text = "/verify@members_hskrk_bot"
-    run(logic.on_group_message(update, None))
-    assert bot.reactions == []
+
+
+
+# ---------- przegląd czatów z TELEGRAM_GROUPS (kanały, brak prawa tagowania) ----------
+class ReviewBot(TagBot):
+    ME = 4242
+
+    def __init__(self, members, chats):
+        super().__init__(members)
+        self.chats = chats                                                         # chat -> (type, title)
+
+    async def get_me(self):
+        from types import SimpleNamespace
+        return SimpleNamespace(id=self.ME)
+
+    async def get_chat(self, chat):
+        from types import SimpleNamespace
+        if chat not in self.chats:
+            raise RuntimeError("Bad Request: chat not found")
+        return SimpleNamespace(type=self.chats[chat][0], title=self.chats[chat][1])
+
+
+def test_review_keeps_only_groups_where_the_bot_can_manage_tags(caplog):
+    ME = ReviewBot.ME
+    bot = ReviewBot(
+        {(-1, ME): {"status": "administrator", "can_manage_tags": True},          # supergrupa z prawem: tak
+         (-2, ME): {"status": "administrator"},                                    # admin bez Manage tags: nie
+         (-3, ME): {"status": "administrator", "can_manage_tags": True},          # kanał: nie, mimo prawa
+         (-5, ME): {"status": "member"}},                                          # zwykły członek: nie
+        {-1: ("supergroup", "Główna"), -2: ("supergroup", "Offtop"), -3: ("channel", "Ogłoszenia"), -5: ("group", "Mała")})
+    logic = TelegramLogic(FakeAuthentik([]), State(), [-1, -2, -3, -4, -5], bot, member_tag="Verified")   # -4: bot go nie widzi
+    assert logic._tag_targets() == [-1, -2, -3, -4, -5]                            # przed przeglądem próbujemy wszędzie
+    with caplog.at_level("INFO"):
+        run(logic.review_chats())
+    assert logic.tag_chats == [-1] and logic._tag_targets() == [-1]
+    text = " ".join(r.getMessage() for r in caplog.records)
+    assert "Ogłoszenia (-3) to channel" in text and "Offtop (-2)" in text and "nie udało się sprawdzić -4" in text
+
+
+def test_tagging_and_backfill_skip_channels_so_they_do_not_eat_the_budget():
+    ME = ReviewBot.ME
+    bot = ReviewBot({(-1, ME): {"status": "administrator", "can_manage_tags": True},
+                     (-3, ME): {"status": "administrator", "can_manage_tags": True},
+                     **{(-1, i): {"status": "member"} for i in (11, 22)}, **{(-3, i): {"status": "member"} for i in (11, 22)}},
+                    {-1: ("supergroup", "G"), -3: ("channel", "K")})
+    az = FakeAuthentik([tg_user(1, telegramIDs=["11"]), tg_user(2, telegramIDs=["22"])])
+    logic = TelegramLogic(az, State(), [-3, -1], bot, member_tag="Verified")       # kanał pierwszy w konfiguracji
+    run(logic.review_chats())
+    assert run(logic.backfill_tags(budget=2)) == 2                                 # cały budżet poszedł na grupę
+    assert sorted((c[1]["chat_id"], c[1]["user_id"]) for c in bot.tags()) == [(-1, 11), (-1, 22)]
+    assert all(c[1]["chat_id"] != -3 for c in bot.api_calls if c[0] != "getChatMember")
+
+
+def test_review_runs_once_then_only_after_the_interval():
+    ME = ReviewBot.ME
+    bot = ReviewBot({(-1, ME): {"status": "administrator", "can_manage_tags": True}}, {-1: ("supergroup", "G")})
+    logic = TelegramLogic(FakeAuthentik([]), State(), [-1], bot, member_tag="Verified")
+    run(logic.maybe_review_chats())
+    calls = len(bot.api_calls)
+    run(logic.maybe_review_chats())
+    assert len(bot.api_calls) == calls                                             # za wcześnie na kolejny przegląd
+    logic._last_review -= 3601
+    run(logic.maybe_review_chats())
+    assert len(bot.api_calls) > calls

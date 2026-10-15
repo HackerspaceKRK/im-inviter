@@ -229,16 +229,16 @@ kontaktu (`telegramReachableIDs`, czyli bot może do Ciebie pisać) i od razu na
 i `/grupy`); gdy bot nie zna konta, podpowiada, co zrobić (wpisać @username w ustawieniach i wysłać `/start`). Użyte na grupie z `TELEGRAM_GROUPS`
 bot odsyła krótką instrukcję „pisz na priv" (jak przy `/start` i `/grupy`), niczego nie zapisuje.
 
-**Wiadomość na grupie jako wyzwalacz.** Gdy ktoś napisze na grupie z `TELEGRAM_GROUPS` (bot jako admin widzi wszystkie wiadomości):
-- **zweryfikowany** (ID jest w `telegramIDs`) dostaje tag, jeśli tej pary (grupa, konto) jeszcze nie załatwiono (potem zero zapytań),
-- **nieznany** (nie ma go w Authentiku) dostaje pod wiadomością reakcję (`TELEGRAM_UNVERIFIED_REACTION`, domyślnie 🙏, puste = wyłączone), najwyżej raz na 6 h
-  na usera w danej grupie. Reakcja jest zachętą, żeby dodać konto w ustawieniach Authentika i napisać do bota `/start`. Admini, boty i anonimowi nadawcy są pomijani.
-  **Boty mogą reagować tylko emoji z listy Telegrama (73 sztuki); 🥺 na niej nie ma**, więc domyślnie 🙏. Jeśli grupa wyłączyła reakcje albo
-  ogranicza ich zestaw, w logu będzie jedno ostrzeżenie na grupę.
-- Lista zweryfikowanych ID jest czytana z Authentika najwyżej raz na minutę (nie przy każdej wiadomości).
+**Przegląd czatów.** Przy starcie i potem co godzinę bot sprawdza każdy czat z `TELEGRAM_GROUPS`: tagi nadaje tylko w **grupach i
+supergrupach, w których jest adminem z prawem Manage tags**. **Kanały** są pomijane (Telegram: `setChatMemberTag` działa tylko w grupach i
+supergrupach; linki do kanałów z `/grupy` dalej działają). W logu jest po jednej linii na pominięty czat z powodem i podsumowanie
+`przegląd czatów: tagi „Verified” w N z M czatów: …`. Prawo przyznane później bot zauważy przy najbliższym przeglądzie (do godziny).
 
-**Wymaga w każdej grupie:** bot jako administrator z prawem **Manage tags** (`can_manage_tags`), oprócz „Invite users". Bez tego w logu
-pojawi się jedno ostrzeżenie na grupę, a reszta bota działa normalnie. Admini i właściciel grupy tagu nie dostają (mają własny „custom title").
+**Wiadomość na grupie jako wyzwalacz.** Gdy ktoś z ID w `telegramIDs` napisze na grupie, w której tagujemy, bot nadaje mu tag (jeśli tej pary
+jeszcze nie załatwiono; potem zero zapytań). Bot jako admin widzi wszystkie wiadomości. Lista ID z Authentika jest czytana najwyżej raz na minutę.
+
+**Wymaga w każdej grupie:** bot jako administrator z prawem **Manage tags** (`can_manage_tags`), oprócz „Invite users". Bez tego przegląd
+pominie tę grupę z ostrzeżeniem w logu, a reszta bota działa normalnie. Admini i właściciel grupy tagu nie dostają (mają własny „custom title").
 Biblioteka `python-telegram-bot` 21 nie ma metody `setChatMemberTag`, więc bot woła ją surowo (`do_api_request`); odczyt członka idzie zwykłym
 `get_chat_member`.
 

@@ -45,7 +45,7 @@ TAG_BACKFILL_BUDGET = 20  # par (grupa, konto) sprawdzanych w jednym przebiegu
 TAG_GAP_S = 0.5  # przerwa między zapytaniami do Telegrama
 TAG_RECHECK_S = 6 * 3600  # jak często sprawdzamy ponownie konto, którego nie było w grupie
 VERIFIED_CACHE_TTL_S = 60  # lista zweryfikowanych ID z Authentika odświeżana najwyżej raz na tyle (nie przy każdej wiadomości)
-REACTION_COOLDOWN_S = 6 * 3600  # niezweryfikowany user dostaje reakcję najwyżej raz na tyle w danej grupie
+CHAT_REVIEW_EVERY_S = 3600  # jak często powtarzamy przegląd grup (typ czatu i prawo tagowania bota)
 
 
 def _tg_req_key(req: dict) -> tuple:
@@ -105,11 +105,14 @@ def clear_matching_username(attrs: dict, tg_username: Optional[str]) -> None:
 
 class TelegramLogic:
     def __init__(self, authentik: Any, state: Any, groups: List[int], bot: Any = None,
-                 settings_url: str = "", member_tag: str = "", unverified_reaction: str = ""):
+                 settings_url: str = "", member_tag: str = ""):
         self.authentik = authentik
-        self.unverified_reaction = unverified_reaction.strip()  # emoji pod wiadomością niezweryfikowanego; puste = wyłączone
         self._verified_cache: Optional[Tuple[float, set]] = None  # (monotonic, zbiór zweryfikowanych ID)
-        self._react_at: dict = {}  # (grupa, user) -> kiedy ostatnio zareagowaliśmy
+        # Grupy z TELEGRAM_GROUPS, w których tagowanie ma sens (przegląd `review_chats`); None = jeszcze nie sprawdzono
+        # (wtedy próbujemy we wszystkich). Kanały nie mają członków z tagami: setChatMemberTag działa tylko w grupach.
+        self.tag_chats: Optional[List[int]] = None
+        self._me_id: Optional[int] = None
+        self._last_review: Optional[float] = None  # monotonic czas ostatniego przeglądu
         self.member_tag = member_tag.strip()  # np. „Verified”; pusty = bot nie ustawia tagów
         self._tag_warned: set = set()  # (grupa, błąd): ten sam problem logujemy raz, nie przy każdym kontakcie
         self.state = state
@@ -215,6 +218,53 @@ class TelegramLogic:
             return
         await self.tag_verified(tg_id)
 
+    def _tag_targets(self) -> List[int]:
+        return list(self.groups) if self.tag_chats is None else list(self.tag_chats)
+
+    async def review_chats(self) -> None:
+        """Przegląd czatów z TELEGRAM_GROUPS pod kątem tagów: tylko grupy i supergrupy (na kanałach `setChatMemberTag` nie działa),
+        w których bot jest adminem z prawem `can_manage_tags`. Reszta jest pomijana z jednym wpisem w logu mówiącym dlaczego.
+        Linki do grup/kanałów (`/grupy`) dalej idą do wszystkich czatów z konfiguracji."""
+        if not (self.bot and self.groups):
+            return
+        if self._me_id is None:
+            self._me_id = (await self.bot.get_me()).id
+        ok: List[int] = []
+        for chat in self.groups:
+            try:
+                info = await self.bot.get_chat(chat)
+                name = f"{getattr(info, 'title', None) or chat} ({chat})"
+                if getattr(info, "type", "supergroup") not in ("group", "supergroup"):
+                    log.info("przegląd czatów: %s to %s, tagi działają tylko w grupach i supergrupach: pomijam", name, info.type)
+                    continue
+                me = await self.bot.get_chat_member(chat, self._me_id)
+                can = me.status == "administrator" and bool(
+                    getattr(me, "can_manage_tags", None) or (getattr(me, "api_kwargs", None) or {}).get("can_manage_tags"))
+                if not can:
+                    if (chat, "rights", me.status) not in self._tag_warned:  # co godzinę ten sam komunikat byłby szumem
+                        self._tag_warned.add((chat, "rights", me.status))
+                        log.warning("przegląd czatów: %s: bot ma status %r bez prawa Manage tags (can_manage_tags): pomijam tagi",
+                                    name, me.status)
+                    continue
+                ok.append(chat)
+            except Exception as e:
+                log.warning("przegląd czatów: nie udało się sprawdzić %s: %s", chat, e)
+        self.tag_chats = ok
+        log.info("przegląd czatów: tagi „%s” w %d z %d czatów z TELEGRAM_GROUPS: %s", self.member_tag, len(ok), len(self.groups),
+                 ", ".join(str(c) for c in ok) or "brak")
+
+    async def maybe_review_chats(self) -> None:
+        """Przegląd na starcie (pierwsze wywołanie) i co `CHAT_REVIEW_EVERY_S`: bot mógł dostać prawo tagowania później."""
+        if not self.member_tag:
+            return
+        if self._last_review is not None and time.monotonic() - self._last_review < CHAT_REVIEW_EVERY_S:
+            return
+        self._last_review = time.monotonic()
+        try:
+            await self.review_chats()
+        except Exception:
+            log.exception("przegląd czatów nie powiódł się")
+
     async def _tag_in_chat(self, chat: int, tg_id: int) -> str:
         """„set” (ustawiono), „has” (już ma), „skip” (nie jest zwykłym członkiem tej grupy), „error”."""
         try:
@@ -244,7 +294,7 @@ class TelegramLogic:
 
         Wymaga w grupie: bot jako admin z prawem `can_manage_tags`. Wołamy surowe API (`do_api_request`), bo biblioteka
         w wersji 21 nie ma jeszcze tej metody. Błąd w jednej grupie nie blokuje pozostałych ani odpowiedzi użytkownikowi."""
-        if not (self.bot and self.member_tag and self.groups):
+        if not (self.bot and self.member_tag and self._tag_targets()):
             return 0
         try:
             users = await self.authentik.list_users()
@@ -255,7 +305,7 @@ class TelegramLogic:
             log.exception("nie udało się sprawdzić, czy tg id=%s jest zweryfikowane", tg_id)
             return 0
         done = 0
-        for chat in self.groups:
+        for chat in self._tag_targets():
             result = await self._tag_in_chat(chat, tg_id)
             self.state.set_tag_pair(chat, tg_id, result in ("set", "has"))
             done += result == "set"
@@ -265,7 +315,7 @@ class TelegramLogic:
         """Dosypuje tagi kontom już zweryfikowanym (także tym połączonym, zanim tagi istniały), po `budget` par (grupa, konto)
         na przebieg i z przerwą między zapytaniami, żeby nie zalewać Telegrama. Załatwione pary nie są sprawdzane drugi raz;
         konto spoza grupy jest sprawdzane ponownie co kilka godzin. Zwraca liczbę sprawdzonych par."""
-        chats = self.groups
+        chats = self._tag_targets()
         if not (self.bot and self.member_tag and chats):
             return 0
         users = await self.authentik.list_users()
@@ -295,40 +345,22 @@ class TelegramLogic:
         return ids
 
     async def on_group_message(self, update: Any, context: Any) -> None:
-        """Wiadomość na grupie z TELEGRAM_GROUPS: zweryfikowany dostaje tag (jeśli jeszcze go nie sprawdzaliśmy), niezweryfikowany
-        reakcję (np. 🙏) pod wiadomością, najwyżej raz na `REACTION_COOLDOWN_S` w danej grupie. Admini, boty i wiadomości
-        „w imieniu kanału/grupy” (anonimowi admini) są pomijani. Bot widzi wszystkie wiadomości tylko jako admin grupy."""
+        """Wiadomość na grupie, w której tagujemy: jeśli nadawca ma ID w `telegramIDs`, a tej pary (grupa, konto) jeszcze nie
+        załatwiono, nadaj tag (potem zero zapytań). Boty i wiadomości „w imieniu kanału/grupy” (anonimowi admini) pomijamy.
+        Bot widzi wszystkie wiadomości tylko jako admin grupy."""
         chat, user, msg = update.effective_chat, update.effective_user, update.effective_message
-        if (not self.bot or chat is None or chat.id not in self.groups or user is None or user.is_bot or msg is None
-                or getattr(msg, "sender_chat", None) is not None):
+        if (not self.bot or not self.member_tag or chat is None or chat.id not in self._tag_targets() or user is None
+                or user.is_bot or msg is None or getattr(msg, "sender_chat", None) is not None):
             return
-        if (getattr(msg, "text", None) or "").lstrip().lower().startswith("/verify"):
-            return  # komenda; bot odpowiada instrukcją, reakcja byłaby zbędna
         try:
-            if user.id in await self._verified_set():
-                if self.member_tag and self.state.tag_pair_due(chat.id, user.id, None, TAG_RECHECK_S):
-                    result = await self._tag_in_chat(chat.id, user.id)
-                    self.state.set_tag_pair(chat.id, user.id, result in ("set", "has"))
-                return
-            await self._nudge(chat.id, user.id, msg.message_id)
+            if user.id in await self._verified_set() and self.state.tag_pair_due(chat.id, user.id, None, TAG_RECHECK_S):
+                result = await self._tag_in_chat(chat.id, user.id)
+                self.state.set_tag_pair(chat.id, user.id, result in ("set", "has"))
         except Exception as e:
             key = (chat.id, "msg", str(e))
             if key not in self._tag_warned:
                 self._tag_warned.add(key)
                 log.warning("obsługa wiadomości na grupie %s nie powiodła się: %s", chat.id, e)
-
-    async def _nudge(self, chat: int, user: int, message_id: int) -> None:
-        if not self.unverified_reaction:
-            return
-        key, now = (chat, user), time.time()
-        if now - self._react_at.get(key, 0) < REACTION_COOLDOWN_S:
-            return
-        self._react_at[key] = now  # zapisujemy przed próbą: błąd nie ma wywołać serii ponowień przy kolejnych wiadomościach
-        member = await self.bot.get_chat_member(chat, user)
-        if member.status in ("administrator", "creator"):
-            return
-        await self.bot.set_message_reaction(chat, message_id, reaction=self.unverified_reaction)
-        log.info("reakcja %s pod wiadomością niezweryfikowanego tg id=%s grupa=%s", self.unverified_reaction, user, chat)
 
     async def verify(self, tg_id: int) -> Tuple[bool, str]:
         """/verify: potwierdza konto, które admin lub bot już przypisał userowi w Authentiku (wiadomość z tego konta dowodzi,
@@ -358,7 +390,7 @@ class TelegramLogic:
     async def on_chat_member(self, update: Any, context: Any) -> None:
         """Ktoś wszedł do grupy (np. z linku od bota po weryfikacji): nadaj tag, jeśli jest zweryfikowany."""
         cmu = update.chat_member
-        if cmu is None or cmu.chat.id not in self.groups:
+        if cmu is None or cmu.chat.id not in self._tag_targets():
             return
         joined = cmu.old_chat_member.status in ("left", "kicked") and cmu.new_chat_member.status in ("member", "restricted")
         if joined:

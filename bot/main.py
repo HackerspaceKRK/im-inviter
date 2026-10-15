@@ -49,11 +49,7 @@ async def amain(dry_run: bool, once: bool, audit: bool = False) -> None:
         if len(member_tag.strip()) > 16:  # limit Telegrama; dłuższy tag tylko generowałby błędy
             log.error("TELEGRAM_MEMBER_TAG ma ponad 16 znaków: tagi wyłączone")
             member_tag = ""
-        # Reakcja pod wiadomością niezweryfikowanego na grupie. Boty mogą używać tylko emoji z listy Telegrama (🥺 na niej nie ma);
-        # puste = wyłączone.
-        reaction = os.environ.get("TELEGRAM_UNVERIFIED_REACTION", "🙏")
-        tg_logic = TelegramLogic(authentik, state, groups, settings_url=settings_url, member_tag=member_tag,
-                                 unverified_reaction=reaction)
+        tg_logic = TelegramLogic(authentik, state, groups, settings_url=settings_url, member_tag=member_tag)
         tg_app = Application.builder().token(os.environ["TELEGRAM_TOKEN"]).build()
         tg_logic.bot = tg_app.bot
         tg_app.add_handler(CommandHandler("start", tg_logic.on_start))
@@ -94,6 +90,7 @@ async def amain(dry_run: bool, once: bool, audit: bool = False) -> None:
                 if tg_logic:
                     await tg_logic.poll_codes()
                     await tg_logic.poll_invites()
+                    await tg_logic.maybe_review_chats()
                     await tg_logic.backfill_tags()
             except Exception:
                 log.exception("przebieg nie powiódł się, próbuję ponownie za %ss", interval)
