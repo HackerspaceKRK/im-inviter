@@ -152,11 +152,20 @@ def clear_matching_username(attrs: dict, tg_username: Optional[str]) -> None:
         attrs.pop("telegramUsername", None)
 
 
+def _display_name(u: Any) -> str:
+    """Imię i nazwisko z obiektu użytkownika Telegrama (User z biblioteki albo surowego `getChatMember`)."""
+    full = getattr(u, "full_name", None)
+    if full:
+        return str(full).strip()
+    return " ".join(p for p in (getattr(u, "first_name", None), getattr(u, "last_name", None)) if p).strip()
+
+
 class TelegramLogic:
     def __init__(self, authentik: Any, state: Any, groups: List[int], bot: Any = None,
                  settings_url: str = "", member_tag: str = "", expired_suffix: str = "", tag_groups: Optional[List[int]] = None):
         self.authentik = authentik
-        self._verified_cache: Optional[Tuple[float, dict]] = None  # (monotonic, ID -> tag)
+        # Krótki cache z Authentika: (monotonic, lista userów, ID -> tag). Grupa pisze wiele wiadomości na minutę.
+        self._verified_cache: Optional[Tuple[float, list, dict]] = None
         # Grupy z TELEGRAM_GROUPS, w których tagowanie ma sens (przegląd `review_chats`); None = jeszcze nie sprawdzono
         # (wtedy próbujemy we wszystkich). Kanały nie mają członków z tagami: setChatMemberTag działa tylko w grupach.
         self.tag_chats: Optional[List[int]] = None
@@ -252,7 +261,7 @@ class TelegramLogic:
         await self.tag_verified(tg_id)
         return True, "Połączone ✅"
 
-    async def note_contact(self, tg_id: int) -> None:
+    async def note_contact(self, tg_id: int, user: Any = None) -> None:
         """Konto napisało do bota (/start, /grupy, przycisk): zapisz ślad w `telegramReachableIDs` jego usera.
 
         Telegram nie pozwala botowi napisać pierwszemu, więc usermanager na podstawie tego śladu (a nie zgadywania)
@@ -268,7 +277,46 @@ class TelegramLogic:
         except Exception:
             log.exception("nie udało się zapisać śladu kontaktu tg id=%s", tg_id)
             return
+        if user is not None:
+            await self.note_identity(tg_id, getattr(user, "username", None), _display_name(user))
         await self.tag_verified(tg_id)
+
+    async def note_identity(self, tg_id: int, username: Optional[str], name: Optional[str]) -> None:
+        """Bot zobaczył konto Telegrama (wiadomość do bota, wiadomość na grupie, członek grupy w `getChatMember`): zapisz jego
+        @username i imię w `telegramAccounts` {ID: {username, name, updated}} usera, któremu to ID przypisano (do wglądu
+        w usermanagerze), i scal: jeśli ten sam user ma wiszący, niepotwierdzony `telegramUsername` z TYM nickiem, wniosek jest
+        spełniony i znika. Wniosek innego usera z tym nickiem zostaje nietknięty (to konflikt, nie scalenie).
+        Zapis tylko przy zmianie; nieprzypisane ID są ignorowane. Błąd nie psuje obsługi wiadomości."""
+        try:
+            users = await self._users_cached()
+            owner = find_linked_user(users, tg_id)
+            if owner is None:
+                return
+            attrs = owner.get("attributes") or {}
+            key, nick, name = str(tg_id), (username or "").lstrip("@"), (name or "").strip()
+            known = attrs.get("telegramAccounts")
+            known = known.get(key) if isinstance(known, dict) else None
+            same = isinstance(known, dict) and known.get("username", "") == nick and known.get("name", "") == name
+            pending = bool(nick) and normalize_tg_username(attrs.get("telegramUsername")) == normalize_tg_username(nick)
+            if same and not pending:
+                return
+
+            def apply(fresh: dict) -> None:
+                accounts = fresh.get("telegramAccounts")
+                accounts = dict(accounts) if isinstance(accounts, dict) else {}
+                cur = accounts.get(key)
+                if not (isinstance(cur, dict) and cur.get("username", "") == nick and cur.get("name", "") == name):
+                    accounts[key] = {"username": nick, "name": name, "updated": int(time.time())}
+                fresh["telegramAccounts"] = accounts
+                if nick:
+                    clear_matching_username(fresh, nick)
+
+            await self.authentik.update_attributes(owner["pk"], mutate=apply)
+            self._verified_cache = None
+            log.info("poznano konto tg id=%s: @%s (%s)%s", tg_id, nick or "-", name or "-",
+                     ", wniosek telegramUsername spełniony" if pending else "")
+        except Exception:
+            log.exception("nie udało się zapisać danych konta tg id=%s", tg_id)
 
     def _tag_targets(self) -> List[int]:
         """Gdzie tagujemy: wynik przeglądu, a przed pierwszym przeglądem lista z konfiguracji (TELEGRAM_MEMBERS_GROUPS)."""
@@ -345,6 +393,9 @@ class TelegramLogic:
         want = want or self.member_tag
         try:
             member = await self.bot.get_chat_member(chat, tg_id)
+            mu = getattr(member, "user", None)  # przy okazji poznajemy @handle, bez dodatkowych zapytań
+            if mu is not None and getattr(mu, "id", None) == tg_id:
+                await self.note_identity(tg_id, getattr(mu, "username", None), _display_name(mu))
             # `tag` w wersji 21 biblioteki nie jest jeszcze polem obiektu: ląduje w api_kwargs
             current = getattr(member, "tag", None) or (getattr(member, "api_kwargs", None) or {}).get("tag")
             # tylko zwykli członkowie (admini mają custom_title, a spoza grupy nie ma komu nadać tagu)
@@ -411,22 +462,34 @@ class TelegramLogic:
                     await asyncio.sleep(TAG_GAP_S)
         return checked
 
+    async def _users_and_tags(self) -> Tuple[list, dict]:
+        now = time.monotonic()
+        c = self._verified_cache
+        if c and now - c[0] < VERIFIED_CACHE_TTL_S:
+            return c[1], c[2]
+        users = await self.authentik.list_users(include_inactive=True)
+        c = (now, users, self._tag_map(users))
+        self._verified_cache = c
+        return c[1], c[2]
+
+    async def _users_cached(self) -> list:
+        return (await self._users_and_tags())[0]
+
     async def _tag_map_cached(self) -> dict:
         """`_tag_map` z krótkim cache: grupa może pisać wiele wiadomości na minutę."""
-        now = time.monotonic()
-        if self._verified_cache and now - self._verified_cache[0] < VERIFIED_CACHE_TTL_S:
-            return self._verified_cache[1]
-        tags = self._tag_map(await self.authentik.list_users(include_inactive=True))
-        self._verified_cache = (now, tags)
-        return tags
+        return (await self._users_and_tags())[1]
 
     async def on_group_message(self, update: Any, context: Any) -> None:
-        """Wiadomość na grupie, w której tagujemy: jeśli nadawca ma ID w `telegramIDs`, a tej pary (grupa, konto) nie załatwiono
-        jeszcze z właściwym tagiem, ustaw go (potem zero zapytań). Boty i wiadomości „w imieniu kanału/grupy” (anonimowi admini)
-        pomijamy. Bot widzi wszystkie wiadomości tylko jako admin grupy."""
+        """Wiadomość na czacie z konfiguracji: poznajemy nick nadawcy (`note_identity`, we wszystkich rolach czatów), a w grupie
+        members dodatkowo ustawiamy tag, jeśli nadawca ma ID w `telegramIDs`, a tej pary (grupa, konto) nie załatwiono jeszcze
+        z właściwym tagiem (potem zero zapytań). Boty i wiadomości „w imieniu kanału/grupy” (anonimowi admini) pomijamy.
+        Bot widzi wszystkie wiadomości tylko jako admin grupy."""
         chat, user, msg = update.effective_chat, update.effective_user, update.effective_message
-        if (not self.bot or not self.member_tag or chat is None or chat.id not in self._tag_targets() or user is None
-                or user.is_bot or msg is None or getattr(msg, "sender_chat", None) is not None):
+        if (not self.bot or chat is None or chat.id not in self.groups or user is None or user.is_bot or msg is None
+                or getattr(msg, "sender_chat", None) is not None):
+            return
+        await self.note_identity(user.id, getattr(user, "username", None), _display_name(user))
+        if not self.member_tag or chat.id not in self._tag_targets():
             return
         try:
             want = (await self._tag_map_cached()).get(user.id)
@@ -439,7 +502,7 @@ class TelegramLogic:
                 self._tag_warned.add(key)
                 log.warning("obsługa wiadomości na grupie %s nie powiodła się: %s", chat.id, e)
 
-    async def verify(self, tg_id: int) -> Tuple[bool, str]:
+    async def verify(self, tg_id: int, user: Any = None) -> Tuple[bool, str]:
         """/verify: potwierdza konto, które admin lub bot już przypisał userowi w Authentiku (wiadomość z tego konta dowodzi,
         że je kontroluje). NIE otwiera procedury /start i nie wysyła linków (od tego są /start i /grupy): zapisuje ślad kontaktu
         (`telegramReachableIDs`) i nadaje tag na grupach. Zwraca (czy znamy konto, tekst odpowiedzi)."""
@@ -447,7 +510,7 @@ class TelegramLogic:
         if find_linked_user(users, tg_id) is None:
             return False, ("Nie znam tego konta Telegrama w Authentiku. Wpisz swój @username w ustawieniach i wyślij /start."
                            + self._settings_line())
-        await self.note_contact(tg_id)
+        await self.note_contact(tg_id, user)
         return True, "✅ Zweryfikowano."
 
     async def on_verify(self, update: Any, context: Any) -> None:
@@ -457,7 +520,7 @@ class TelegramLogic:
             return
         u = update.effective_user
         try:
-            ok, text = await self.verify(u.id)
+            ok, text = await self.verify(u.id, u)
         except Exception:
             log.exception("/verify tg id=%s nie powiodło się", u.id)
             ok, text = False, "Coś poszło nie tak, spróbuj za chwilę."
@@ -605,7 +668,7 @@ class TelegramLogic:
             await self._reply_in_group(update, context, "/start")
             return
         u = update.effective_user
-        await self.note_contact(u.id)
+        await self.note_contact(u.id, u)
         text, pk = await self.start_reply(u.id, u.username)
         log.info("/start od tg id=%s username=%s -> %s", u.id, u.username,
                  f"pytanie o potwierdzenie (authentik pk={pk})" if pk is not None else "bez dopasowania")
@@ -635,7 +698,7 @@ class TelegramLogic:
             await self._reply_in_group(update, context, "/grupy")
             return
         u = update.effective_user
-        await self.note_contact(u.id)
+        await self.note_contact(u.id, u)
         send, text = await self.groups_reply(u.id)
         log.info("/grupy od tg id=%s -> %s", u.id, "wysyłam linki" if send else "odmowa")
         if send:
@@ -651,7 +714,7 @@ class TelegramLogic:
             return
         pk = int(q.data.split(":", 1)[1])
         u = q.from_user
-        await self.note_contact(u.id)
+        await self.note_contact(u.id, u)
         log.info("potwierdzenie od tg id=%s username=%s dla authentik pk=%s", u.id, u.username, pk)
         users = await self.authentik.list_users()
         # Powtórna weryfikacja w chwili kliknięcia: wniosek nadal istnieje i pasuje do username.

@@ -1336,7 +1336,8 @@ def test_account_added_to_authentik_is_recognised_after_the_cache_expires():
     az.users.append(tg_user(1, telegramIDs=["99"]))                            # admin dodaje ID w usermanagerze
     run(logic.on_group_message(_group_msg(99, message_id=2), None))            # cache jeszcze świeży: nadal nieznany
     assert bot.tags() == []
-    logic._verified_cache = (logic._verified_cache[0] - ts.VERIFIED_CACHE_TTL_S - 1, logic._verified_cache[1])
+    c = logic._verified_cache
+    logic._verified_cache = (c[0] - ts.VERIFIED_CACHE_TTL_S - 1, c[1], c[2])
     run(logic.on_group_message(_group_msg(99, message_id=3), None))            # cache wygasł: rozpoznany, tag
     assert len(bot.tags()) == 1
 
@@ -1569,3 +1570,81 @@ def test_legacy_telegram_groups_variable_means_links_without_tags():
     logic = TelegramLogic(az, State(), chats.all, bot, member_tag="Verified", tag_groups=chats.tag)
     run(logic.tag_verified(99))
     assert chats.all == [-7] and bot.api_calls == []                                    # linki tak, tagi nie
+
+
+# ---------- odkrywanie @handle po ID (telegramAccounts) i scalanie wiszącego wniosku ----------
+def _tg_obj(uid, username=None, first="Jan", last="Kowalski", is_bot=False):
+    from types import SimpleNamespace as NS
+    return NS(id=uid, username=username, first_name=first, last_name=last, full_name=f"{first} {last}".strip(), is_bot=is_bot)
+
+
+def test_identity_is_recorded_for_an_assigned_id_and_not_rewritten_when_unchanged():
+    az = FakeAuthentik([tg_user(1, telegramIDs=["99"])])
+    logic = TelegramLogic(az, State(), [-1], None)
+    run(logic.note_identity(99, "Jan_Kowalski", "Jan Kowalski"))
+    acc = az.users[0]["attributes"]["telegramAccounts"]["99"]
+    assert acc["username"] == "Jan_Kowalski" and acc["name"] == "Jan Kowalski" and acc["updated"] > 0
+    n = len(az.writes)
+    run(logic.note_identity(99, "@Jan_Kowalski", "Jan Kowalski"))               # to samo: zero zapisów
+    assert len(az.writes) == n
+    run(logic.note_identity(99, "jan_nowy", "Jan Kowalski"))                    # nick się zmienił: aktualizacja
+    assert az.users[0]["attributes"]["telegramAccounts"]["99"]["username"] == "jan_nowy"
+    run(logic.note_identity(99, None, "Jan Kowalski"))                          # usunął nick: zapisujemy pusty
+    assert az.users[0]["attributes"]["telegramAccounts"]["99"]["username"] == ""
+    run(logic.note_identity(12345, "obcy", "Obcy"))                             # ID nikomu nieprzypisane: ignorujemy
+    assert "12345" not in az.users[0]["attributes"]["telegramAccounts"]
+
+
+def test_other_ids_of_the_same_user_are_kept_when_one_is_updated():
+    az = FakeAuthentik([tg_user(1, telegramIDs=["99", "100"],
+                                telegramAccounts={"100": {"username": "drugie", "name": "X", "updated": 5}})])
+    run(TelegramLogic(az, State(), [-1], None).note_identity(99, "pierwsze", "Y"))
+    acc = az.users[0]["attributes"]["telegramAccounts"]
+    assert acc["100"]["username"] == "drugie" and acc["99"]["username"] == "pierwsze"
+
+
+def test_a_hanging_username_request_is_merged_when_the_same_user_holds_that_id():
+    az = FakeAuthentik([tg_user(1, telegramIDs=["99"], telegramUsername="@Jan_Kowalski", telegramStatus="ok")])
+    run(TelegramLogic(az, State(), [-1], None).note_identity(99, "jan_kowalski", "Jan Kowalski"))
+    attrs = az.users[0]["attributes"]
+    assert "telegramUsername" not in attrs                                      # wniosek spełniony (porównanie bez wielkości liter)
+    assert attrs["telegramAccounts"]["99"]["username"] == "jan_kowalski" and attrs["telegramStatus"] == "ok"
+
+
+def test_a_request_with_a_different_nick_or_on_another_user_is_left_alone():
+    az = FakeAuthentik([tg_user(1, telegramIDs=["99"], telegramUsername="@ktos_inny"),
+                        tg_user(2, telegramUsername="@jan_kowalski")])          # wniosek INNEGO usera z tym nickiem
+    run(TelegramLogic(az, State(), [-1], None).note_identity(99, "jan_kowalski", "Jan"))
+    assert az.users[0]["attributes"]["telegramUsername"] == "@ktos_inny"
+    assert az.users[1]["attributes"]["telegramUsername"] == "@jan_kowalski"      # konflikt, nie scalenie
+
+
+def test_identity_is_learned_from_commands_group_messages_in_any_chat_and_get_chat_member():
+    from types import SimpleNamespace as NS
+    az = FakeAuthentik([tg_user(1, telegramIDs=["7"]), tg_user(2, telegramIDs=["8"]), tg_user(3, telegramIDs=["9"])])
+    bot = TagBot({(-1, 9): {"status": "member"}})
+    logic = TelegramLogic(az, State(), [-1, -2], bot, member_tag="Verified", tag_groups=[-1])
+    upd, ctx, _sent = _fake_update("private")                                    # user id 7, username jan_kowalski
+    run(logic.on_groups(upd, ctx))
+    assert az.users[0]["attributes"]["telegramAccounts"]["7"]["username"] == "jan_kowalski"
+    msg = _group_msg(8, chat=-2)                                                 # grupa publiczna (-2): bez tagów, ale poznajemy nick
+    msg.effective_user = _tg_obj(8, "osma")
+    run(logic.on_group_message(msg, None))
+    assert az.users[1]["attributes"]["telegramAccounts"]["8"]["username"] == "osma"
+    assert all(c[1]["chat_id"] == -1 and c[1]["user_id"] != 8 for c in bot.api_calls)   # publiczna (-2) i user 8: zero zapytań
+    orig = bot.get_chat_member
+
+    async def with_user(chat, user):                                             # getChatMember zwraca też obiekt usera
+        m = await orig(chat, user)
+        m.user = _tg_obj(user, "dziewiaty")
+        return m
+    bot.get_chat_member = with_user
+    run(logic.tag_verified(9))
+    assert az.users[2]["attributes"]["telegramAccounts"]["9"]["username"] == "dziewiaty"
+
+
+def test_identity_error_does_not_break_the_handler():
+    class Broken(FakeAuthentik):
+        async def list_users(self, include_inactive=False):
+            raise RuntimeError("authentik down")
+    run(TelegramLogic(Broken([]), State(), [-1], None).note_identity(1, "x", "X"))        # nie rzuca

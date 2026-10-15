@@ -29,6 +29,7 @@ Kontrakt danych i plan zmian. Źródłem prawdy jest Authentik (atrybuty usera);
 | `matrixInviteRequests` | `[{handle, by, ts}]` | **usermanager** | prośby o ręczny invite; bot przetwarza i czyści |
 | `imInviterNote` | `string` | bot | komentarz bota o wykrytej niespójności (np. nadpisane atrybuty); bot go nie kasuje, admin może |
 | `telegramReachableIDs` | `string[]` | bot | które z `telegramIDs` napisały do bota (`/start`, `/grupy`, `/verify`, przycisk, kod), czyli do których bot może wysłać DM (Telegram nie pozwala pisać pierwszemu). **To nie jest weryfikacja**: każde ID z `telegramIDs` jest uznane za właściwe. `usermanager`: ID spoza listy = brak przycisku Invite i dyskretna uwaga, że bot nie może jeszcze napisać; gdy atrybutu brak, a jest `telegramStatus`, konto uznaje za osiągalne (dane sprzed atrybutu) |
+| `telegramAccounts` | `{ID: {username, name, updated}}` | bot | nick i imię **odkryte** dla ID z `telegramIDs` (do wglądu w usermanagerze); pusty `username` = konto nie ma nicka. Bot go nie wymaga ani nie czyta do niczego, tylko zapisuje |
 | `telegramInviteRequests` | `[{id, by, ts}]` | **usermanager** | prośby o ręczne wysłanie linków do grup na dane konto Telegram; bot przetwarza i czyści |
 | `telegramInviteResults` | `[{id, by, ts, result, groups}]` (ostatnie 5) | bot | wynik ręcznych wysyłek (`ok: wysłano N linków…` albo `error: …`) |
 | `matrixInviteResults` | `[{handle, by, ts, result, rooms}]` (ostatnie 5) | bot | wynik ręcznych zaproszeń |

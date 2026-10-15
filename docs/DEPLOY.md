@@ -257,6 +257,18 @@ Biblioteka `python-telegram-bot` 21 nie ma metody `setChatMemberTag`, więc bot 
 
 **Nie zdejmuje tagu:** gdy ID zniknie z `telegramIDs` albo user straci członkostwo, tag zostaje do ręcznego usunięcia (świadomie).
 
+## Odkrywanie @handle po ID (`telegramAccounts`)
+
+Gdy bot **widzi** konto Telegrama, zapisuje jego @username i imię w `telegramAccounts` usera, któremu to ID przypisano (usermanager pokazuje nick
+przy ID). Źródła, bez żadnych dodatkowych zapytań: wiadomość do bota (`/start`, `/grupy`, `/verify`, przycisk), wiadomość na dowolnym czacie z
+konfiguracji (także publicznym) i obiekt użytkownika zwracany przez `getChatMember` przy nadawaniu tagów w grupie members (tak bot poznaje
+członków, którzy nigdy nic nie napisali). **Ograniczenie Telegrama:** bot nie dowie się nicku ID, którego nigdy nie zobaczył (nie pisało do bota
+i nie ma go na żadnym czacie z konfiguracji); Bot API nie zamienia ID na nick „na zawołanie".
+
+**Scalanie:** jeśli ten sam user ma wiszący, niepotwierdzony `telegramUsername` z tym samym nickiem co odkryty dla jego ID (bez względu na wielkość
+liter), wniosek jest uznany za spełniony i znika (nie wisi już jako „Waiting for /start"). Wniosek innego usera z tym nickiem zostaje nietknięty
+(to konflikt, nie scalenie), podobnie wniosek z innym nickiem. Zapis następuje tylko przy zmianie (nick zmieniony lub usunięty).
+
 ## Spójność z Authentikiem (nadpisane atrybuty)
 
 Źródłem prawdy jest Authentik, a SQLite (`state.db`) to tylko pamięć bota. Znany problem: narzędzie, które zapisuje usera
