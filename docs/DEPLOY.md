@@ -215,25 +215,24 @@ je zaprosić. Konta połączone przez bota przed tą zmianą (mają `telegramSta
 ## Tag „Verified” na grupach Telegrama
 
 Bot ustawia zwykłym członkom grup z `TELEGRAM_GROUPS` (tylko tych) tag, domyślnie `Verified` (zmiana/wyłączenie: `TELEGRAM_MEMBER_TAG`, puste =
-wyłączone, max 16 znaków, bez emoji). **Zweryfikowane** = ID jest w `telegramIDs` jakiegoś usera **i**:
-- jest w `telegramReachableIDs` (konto napisało do bota: `/start`, `/grupy`, przycisk albo kod, więc je kontroluje), **albo**
-- user nie ma tego atrybutu, ale ma `telegramStatus` = `ok` (połączony przez bota, zanim atrybut istniał): wtedy wszystkie jego ID.
+wyłączone, max 16 znaków, bez emoji). **Zweryfikowane** = każde ID z `telegramIDs` jakiegoś usera. Uznajemy je za właściwe, niezależnie od
+tego, czy dodał je admin w usermanagerze, czy bot po weryfikacji (decyzja 2026-10-15). Kontakt konta z botem (`telegramReachableIDs`) mówi tylko,
+czy bot może do niego napisać (potrzebne do wysyłki linków), a nie czy ID jest czyje.
 
-ID wpisane ręcznie przez admina dostaje tag dopiero po pierwszej wiadomości do bota.
-
-**Kiedy:** przy kontakcie z botem, przy połączeniu konta, przy wejściu do grupy (zdarzenie `chat_member`) oraz **dosypem dla już połączonych**: w
+**Kiedy:** przy kontakcie z botem, przy połączeniu konta, przy wejściu do grupy (zdarzenie `chat_member`), przy pierwszej wiadomości na grupie
+oraz **dosypem dla wszystkich dodanych**: w
 każdym przebiegu bot sprawdza do 20 par (grupa, konto), z przerwą 0,5 s, i pomija pary już załatwione. Konto, którego nie ma w grupie, jest
 sprawdzane ponownie najwcześniej po 6 h. Przy kilkuset kontach pierwszy dosyp trwa kilkanaście minut, potem dzieje się niemal nic.
 
 **`/verify` (tylko w prywatnej rozmowie z botem).** Potwierdza konto, które admin lub bot już przypisał userowi w Authentiku: zapisuje ślad
-kontaktu (`telegramReachableIDs`) i od razu nadaje tag na grupach. Nie otwiera procedury `/start` i nie wysyła linków (od tego są `/start`
+kontaktu (`telegramReachableIDs`, czyli bot może do Ciebie pisać) i od razu nadaje tag na grupach (tag dostałoby i bez tego). Nie otwiera procedury `/start` i nie wysyła linków (od tego są `/start`
 i `/grupy`); gdy bot nie zna konta, podpowiada, co zrobić (wpisać @username w ustawieniach i wysłać `/start`). Użyte na grupie z `TELEGRAM_GROUPS`
 bot odsyła krótką instrukcję „pisz na priv" (jak przy `/start` i `/grupy`), niczego nie zapisuje.
 
 **Wiadomość na grupie jako wyzwalacz.** Gdy ktoś napisze na grupie z `TELEGRAM_GROUPS` (bot jako admin widzi wszystkie wiadomości):
-- **zweryfikowany** dostaje tag, jeśli tej pary (grupa, konto) jeszcze nie załatwiono (potem zero zapytań),
-- **niezweryfikowany** dostaje pod wiadomością reakcję (`TELEGRAM_UNVERIFIED_REACTION`, domyślnie 🙏, puste = wyłączone), najwyżej raz na 6 h
-  na usera w danej grupie. Reakcja jest zachętą, żeby napisać do bota i się zweryfikować. Admini, boty i anonimowi nadawcy są pomijani.
+- **zweryfikowany** (ID jest w `telegramIDs`) dostaje tag, jeśli tej pary (grupa, konto) jeszcze nie załatwiono (potem zero zapytań),
+- **nieznany** (nie ma go w Authentiku) dostaje pod wiadomością reakcję (`TELEGRAM_UNVERIFIED_REACTION`, domyślnie 🙏, puste = wyłączone), najwyżej raz na 6 h
+  na usera w danej grupie. Reakcja jest zachętą, żeby dodać konto w ustawieniach Authentika i napisać do bota `/start`. Admini, boty i anonimowi nadawcy są pomijani.
   **Boty mogą reagować tylko emoji z listy Telegrama (73 sztuki); 🥺 na niej nie ma**, więc domyślnie 🙏. Jeśli grupa wyłączyła reakcje albo
   ogranicza ich zestaw, w logu będzie jedno ostrzeżenie na grupę.
 - Lista zweryfikowanych ID jest czytana z Authentika najwyżej raz na minutę (nie przy każdej wiadomości).
