@@ -212,6 +212,20 @@ połączone kodem, bot dopisuje jego ID do `telegramReachableIDs`. `usermanager`
 śladem. ID wpisane ręcznie przez admina nie ma śladu, dopóki to konto nie napisze do bota (np. `/grupy`); od tego momentu da się
 je zaprosić. Konta połączone przez bota przed tą zmianą (mają `telegramStatus`) `usermanager` uznaje za osiągalne.
 
+## Tag „Verified” na grupach Telegrama
+
+Bot ustawia zwykłym członkom grup z `TELEGRAM_GROUPS` tag (domyślnie `Verified`, zmiana/wyłączenie: `TELEGRAM_MEMBER_TAG`, puste = wyłączone,
+max 16 znaków, bez emoji). **Zweryfikowane** = ID jest w `telegramIDs` jakiegoś usera **i** w `telegramReachableIDs` (konto napisało do bota:
+`/start`, `/grupy`, przycisk albo kod, więc je kontroluje). ID wpisane ręcznie przez admina dostaje tag dopiero po pierwszej wiadomości
+do bota. Tag jest nadawany przy takim kontakcie i przy wejściu do grupy (zdarzenie `chat_member`).
+
+**Wymaga w każdej grupie:** bot jako administrator z prawem **Manage tags** (`can_manage_tags`), oprócz „Invite users". Bez tego w logu
+pojawi się jedno ostrzeżenie na grupę, a reszta bota działa normalnie. Admini i właściciel grupy tagu nie dostają (mają własny „custom title").
+Biblioteka `python-telegram-bot` 21 nie ma jeszcze metody `setChatMemberTag`, więc bot woła surowe API (`do_api_request`).
+
+**Nie zdejmuje tagu:** gdy ID zniknie z `telegramIDs` albo user straci członkostwo, tag zostaje do ręcznego usunięcia (świadomie, bez cyklicznego
+przeglądu grup).
+
 ## Spójność z Authentikiem (nadpisane atrybuty)
 
 Źródłem prawdy jest Authentik, a SQLite (`state.db`) to tylko pamięć bota. Znany problem: narzędzie, które zapisuje usera

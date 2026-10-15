@@ -1137,3 +1137,91 @@ def test_linking_through_the_bot_records_contact_too():
     az = FakeAuthentik([tg_user(1, telegramUsername="@Jan_Kowalski")])
     ok, _ = run(TelegramLogic(az, State(), [], None).link(1, 99, None, "Jan_Kowalski"))
     assert ok and az.users[0]["attributes"]["telegramReachableIDs"] == ["99"]
+
+
+# ---------- tag „Verified” na grupach (setChatMemberTag) ----------
+class TagBot(FakeTgBot):
+    """Surowe API: getChatMember zwraca słownik jak w Telegramie, setChatMemberTag zapisuje wywołanie."""
+    def __init__(self, members, broken=()):
+        super().__init__()
+        self.members, self.broken, self.api_calls = members, set(broken), []   # members[(chat, user)] = {"status", "tag"?}
+
+    async def do_api_request(self, endpoint, api_kwargs=None, **kw):
+        self.api_calls.append((endpoint, dict(api_kwargs or {})))
+        chat, user = api_kwargs["chat_id"], api_kwargs["user_id"]
+        if chat in self.broken:
+            raise RuntimeError("Bad Request: not enough rights")
+        if endpoint == "getChatMember":
+            return dict(self.members.get((chat, user), {"status": "left"}))
+        assert endpoint == "setChatMemberTag"
+        self.members[(chat, user)]["tag"] = api_kwargs["tag"]
+        return True
+
+    def tags(self):
+        return [c for c in self.api_calls if c[0] == "setChatMemberTag"]
+
+
+def test_verified_account_gets_the_tag_only_as_a_plain_member():
+    bot = TagBot({(-1, 99): {"status": "member"}, (-2, 99): {"status": "administrator"},
+                  (-3, 99): {"status": "member", "tag": "Verified"}, (-4, 99): {"status": "left"}})
+    az = FakeAuthentik([tg_user(1, telegramIDs=["99"], telegramReachableIDs=["99"])])
+    n = run(TelegramLogic(az, State(), [-1, -2, -3, -4], bot, member_tag="Verified").tag_verified(99))
+    assert n == 1
+    assert bot.tags() == [("setChatMemberTag", {"chat_id": -1, "user_id": 99, "tag": "Verified"})]   # nie admin, nie już otagowany, nie spoza grupy
+
+
+def test_account_without_a_trace_of_contact_is_not_tagged_and_not_even_queried():
+    bot = TagBot({(-1, 99): {"status": "member"}})
+    az = FakeAuthentik([tg_user(1, telegramIDs=["99"])])                          # ID wpisane ręcznie, konto nie pisało do bota
+    assert run(TelegramLogic(az, State(), [-1], bot, member_tag="Verified").tag_verified(99)) == 0
+    assert bot.api_calls == []
+    assert run(TelegramLogic(az, State(), [-1], bot, member_tag="Verified").tag_verified(555)) == 0   # ID nieprzypisane nikomu
+    assert bot.api_calls == []
+
+
+def test_first_message_to_the_bot_from_a_manual_id_marks_it_and_tags_it():
+    bot = TagBot({(-1, 99): {"status": "member"}})
+    az = FakeAuthentik([tg_user(1, telegramIDs=["99"])])
+    run(TelegramLogic(az, State(), [-1], bot, member_tag="Verified").note_contact(99))
+    assert az.users[0]["attributes"]["telegramReachableIDs"] == ["99"]
+    assert len(bot.tags()) == 1
+
+
+def test_tag_disabled_when_empty():
+    bot = TagBot({(-1, 99): {"status": "member"}})
+    az = FakeAuthentik([tg_user(1, telegramIDs=["99"], telegramReachableIDs=["99"])])
+    assert run(TelegramLogic(az, State(), [-1], bot, member_tag="").tag_verified(99)) == 0
+    assert bot.api_calls == []
+
+
+def test_one_failing_group_does_not_block_others_and_is_logged_once(caplog):
+    bot = TagBot({(-1, 99): {"status": "member"}, (-2, 99): {"status": "member"}}, broken=[-1])
+    az = FakeAuthentik([tg_user(1, telegramIDs=["99"], telegramReachableIDs=["99"])])
+    logic = TelegramLogic(az, State(), [-1, -2], bot, member_tag="Verified")
+    with caplog.at_level("WARNING"):
+        assert run(logic.tag_verified(99)) == 1                                   # druga grupa dostała tag
+        run(logic.tag_verified(99))
+    assert sum("can_manage_tags" in r.getMessage() for r in caplog.records) == 1   # ostrzeżenie raz, nie przy każdym kontakcie
+
+
+def test_joining_a_configured_group_triggers_the_tag():
+    from types import SimpleNamespace as NS
+
+    def update(chat, old, new):
+        return NS(chat_member=NS(chat=NS(id=chat), old_chat_member=NS(status=old),
+                                 new_chat_member=NS(status=new, user=NS(id=99))))
+    bot = TagBot({(-1, 99): {"status": "member"}})
+    az = FakeAuthentik([tg_user(1, telegramIDs=["99"], telegramReachableIDs=["99"])])
+    logic = TelegramLogic(az, State(), [-1], bot, member_tag="Verified")
+    run(logic.on_chat_member(update(-1, "member", "administrator"), None))        # awans, nie wejście
+    run(logic.on_chat_member(update(-7, "left", "member"), None))                 # obca grupa
+    assert bot.api_calls == []
+    run(logic.on_chat_member(update(-1, "left", "member"), None))                 # wejście do grupy z konfiguracji
+    assert len(bot.tags()) == 1
+
+
+def test_linking_through_the_bot_tags_the_account():
+    bot = TagBot({(-1, 99): {"status": "member"}})
+    az = FakeAuthentik([tg_user(1, telegramUsername="@Jan_Kowalski")])
+    ok, _ = run(TelegramLogic(az, State(), [-1], bot, member_tag="Verified").link(1, 99, None, "Jan_Kowalski"))
+    assert ok and len(bot.tags()) == 1

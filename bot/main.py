@@ -39,23 +39,30 @@ async def amain(dry_run: bool, once: bool, audit: bool = False) -> None:
     tg_logic = None
     tg_app = None
     if os.environ.get("TELEGRAM_TOKEN") and not dry_run:
-        from telegram.ext import Application, CallbackQueryHandler, CommandHandler
+        from telegram.ext import Application, CallbackQueryHandler, ChatMemberHandler, CommandHandler
 
         groups = [int(g) for g in _csv("TELEGRAM_GROUPS")]
         settings_url = os.environ["AUTHENTIK_URL"].rstrip("/") + "/if/user/#/settings"
-        tg_logic = TelegramLogic(authentik, state, groups, settings_url=settings_url)
+        # Tag „Verified” przy nicku na grupach (puste TELEGRAM_MEMBER_TAG wyłącza). Max 16 znaków, bez emoji.
+        member_tag = os.environ.get("TELEGRAM_MEMBER_TAG", "Verified")
+        if len(member_tag.strip()) > 16:  # limit Telegrama; dłuższy tag tylko generowałby błędy
+            log.error("TELEGRAM_MEMBER_TAG ma ponad 16 znaków: tagi wyłączone")
+            member_tag = ""
+        tg_logic = TelegramLogic(authentik, state, groups, settings_url=settings_url, member_tag=member_tag)
         tg_app = Application.builder().token(os.environ["TELEGRAM_TOKEN"]).build()
         tg_logic.bot = tg_app.bot
         tg_app.add_handler(CommandHandler("start", tg_logic.on_start))
         tg_app.add_handler(CommandHandler("grupy", tg_logic.on_groups))
         tg_app.add_handler(CallbackQueryHandler(tg_logic.on_button))
+        tg_app.add_handler(ChatMemberHandler(tg_logic.on_chat_member, ChatMemberHandler.CHAT_MEMBER))
         await tg_app.initialize()
         await tg_app.bot.set_my_commands([
             ("start", "Połącz konto z Authentikiem"),
             ("grupy", "Wyślij mi świeże linki do grup"),
         ])
         await tg_app.start()
-        await tg_app.updater.start_polling()
+        # chat_member (wejście do grupy) nie przychodzi domyślnie: trzeba o nie poprosić
+        await tg_app.updater.start_polling(allowed_updates=["message", "callback_query", "chat_member"])
     elif os.environ.get("TELEGRAM_TOKEN"):
         log.info("dry-run: Telegram wyłączony")
 
