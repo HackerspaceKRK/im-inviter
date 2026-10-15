@@ -129,7 +129,8 @@ class TelegramLogic:
             f"Moje komendy działają tylko w prywatnej rozmowie. Napisz do {me} na priv:\n"
             "• /start — łączy Twoje konto Telegram z kontem w Authentiku (najpierw wpisz swój @username "
             "w ustawieniach Authentika), a potem wysyła Ci jednorazowe linki do grup.\n"
-            "• /grupy — wysyła świeże, jednorazowe linki do grup (tylko dla kont już połączonych przez /start)."
+            "• /grupy — wysyła świeże, jednorazowe linki do grup (tylko dla kont już połączonych przez /start).\n"
+            "• /verify — potwierdza Twoje konto (już dodane w Authentiku) i nadaje tag na grupach; bez linków."
             + self._settings_line()
         )
     # --- czysta decyzja dla /start (testowalna bez Telegrama) ---
@@ -303,6 +304,8 @@ class TelegramLogic:
         if (not self.bot or chat is None or chat.id not in self.groups or user is None or user.is_bot or msg is None
                 or getattr(msg, "sender_chat", None) is not None):
             return
+        if (getattr(msg, "text", None) or "").lstrip().lower().startswith("/verify"):
+            return  # komenda; bot odpowiada instrukcją, reakcja byłaby zbędna
         try:
             if user.id in await self._verified_set():
                 if self.member_tag and self.state.tag_pair_due(chat.id, user.id, None, TAG_RECHECK_S):
@@ -328,6 +331,31 @@ class TelegramLogic:
             return
         await self.bot.set_message_reaction(chat, message_id, reaction=self.unverified_reaction)
         log.info("reakcja %s pod wiadomością niezweryfikowanego tg id=%s grupa=%s", self.unverified_reaction, user, chat)
+
+    async def verify(self, tg_id: int) -> Tuple[bool, str]:
+        """/verify: potwierdza konto, które admin lub bot już przypisał userowi w Authentiku (wiadomość z tego konta dowodzi,
+        że je kontroluje). NIE otwiera procedury /start i nie wysyła linków (od tego są /start i /grupy): zapisuje ślad kontaktu
+        (`telegramReachableIDs`) i nadaje tag na grupach. Zwraca (czy znamy konto, tekst odpowiedzi)."""
+        users = await self.authentik.list_users()
+        if find_linked_user(users, tg_id) is None:
+            return False, ("Nie znam tego konta Telegrama w Authentiku. Wpisz swój @username w ustawieniach i wyślij /start."
+                           + self._settings_line())
+        await self.note_contact(tg_id)
+        return True, "✅ Zweryfikowano."
+
+    async def on_verify(self, update: Any, context: Any) -> None:
+        """/verify działa tylko w prywatnej rozmowie; na grupie z TELEGRAM_GROUPS bot odsyła instrukcję jak przy /start."""
+        if update.effective_chat.type != "private":
+            await self._reply_in_group(update, context, "/verify")
+            return
+        u = update.effective_user
+        try:
+            ok, text = await self.verify(u.id)
+        except Exception:
+            log.exception("/verify tg id=%s nie powiodło się", u.id)
+            ok, text = False, "Coś poszło nie tak, spróbuj za chwilę."
+        log.info("/verify od tg id=%s -> %s", u.id, "ok" if ok else "nieznane konto")
+        await update.message.reply_text(text)
 
     async def on_chat_member(self, update: Any, context: Any) -> None:
         """Ktoś wszedł do grupy (np. z linku od bota po weryfikacji): nadaj tag, jeśli jest zweryfikowany."""

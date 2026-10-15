@@ -1357,3 +1357,49 @@ def test_fresh_verification_is_recognised_immediately_despite_the_cache():
     logic._react_at.clear()
     run(logic.on_group_message(_group_msg(99, message_id=2), None))            # teraz zweryfikowany: bez nowej reakcji
     assert len(bot.reactions) == 1
+
+
+# ---------- /verify (tylko prywatnie) ----------
+def test_verify_in_private_confirms_an_account_already_assigned_in_authentik_and_tags_it():
+    bot = TagBot({(-1, 7): {"status": "member"}})
+    az = FakeAuthentik([tg_user(1, telegramIDs=["7"])])                          # ID wpisane ręcznie przez admina
+    logic = TelegramLogic(az, State(), [-1], bot, member_tag="Verified")
+    upd, ctx, sent = _fake_update("private")                                       # user id 7
+    run(logic.on_verify(upd, ctx))
+    assert sent == ["✅ Zweryfikowano."]
+    assert az.users[0]["attributes"]["telegramReachableIDs"] == ["7"]             # ślad kontaktu: od teraz zweryfikowany
+    assert len(bot.tags()) == 1
+
+
+def test_verify_does_not_start_linking_and_sends_no_links():
+    bot = TagBot({})
+    az = FakeAuthentik([tg_user(1, telegramUsername="@jan_kowalski")])             # wniosek czeka, konto niepołączone
+    logic = TelegramLogic(az, State(), [-1], bot, member_tag="Verified", settings_url=SETTINGS)
+    upd, ctx, sent = _fake_update("private")
+    upd.effective_user.username = "jan_kowalski"                                   # /start by tu połączył; /verify nie
+    run(logic.on_verify(upd, ctx))
+    assert "telegramIDs" not in az.users[0]["attributes"] and az.users[0]["attributes"]["telegramUsername"] == "@jan_kowalski"
+    assert "Nie znam tego konta" in sent[0] and SETTINGS in sent[0]
+    assert bot.sent == [] and bot.api_calls == []                                  # żadnych linków, żadnych tagów
+
+
+def test_verify_in_a_group_only_points_to_the_private_chat_and_changes_nothing():
+    bot = TagBot({(-5, 7): {"status": "member"}})
+    az = FakeAuthentik([tg_user(1, telegramIDs=["7"])])
+    logic = TelegramLogic(az, State(), [-5], bot, member_tag="Verified")           # _fake_update używa czatu -5
+    upd, ctx, sent = _fake_update("supergroup")
+    run(logic.on_verify(upd, ctx))
+    assert len(sent) == 1 and "prywatnej rozmowie" in sent[0]
+    assert "telegramReachableIDs" not in az.users[0]["attributes"] and bot.api_calls == []
+    upd2, ctx2, sent2 = _fake_update("supergroup")
+    run(TelegramLogic(az, State(), [-99], bot).on_verify(upd2, ctx2))              # obca grupa: cisza
+    assert sent2 == []
+
+
+def test_verify_command_on_a_group_does_not_also_trigger_the_unverified_reaction():
+    bot = ReactBot({(-1, 98): {"status": "member"}})
+    logic = TelegramLogic(FakeAuthentik([]), State(), [-1], bot, unverified_reaction="🙏")
+    update = _group_msg(98, message_id=3)
+    update.effective_message.text = "/verify@members_hskrk_bot"
+    run(logic.on_group_message(update, None))
+    assert bot.reactions == []

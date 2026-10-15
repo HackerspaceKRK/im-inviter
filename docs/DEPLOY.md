@@ -225,6 +225,11 @@ ID wpisane ręcznie przez admina dostaje tag dopiero po pierwszej wiadomości do
 każdym przebiegu bot sprawdza do 20 par (grupa, konto), z przerwą 0,5 s, i pomija pary już załatwione. Konto, którego nie ma w grupie, jest
 sprawdzane ponownie najwcześniej po 6 h. Przy kilkuset kontach pierwszy dosyp trwa kilkanaście minut, potem dzieje się niemal nic.
 
+**`/verify` (tylko w prywatnej rozmowie z botem).** Potwierdza konto, które admin lub bot już przypisał userowi w Authentiku: zapisuje ślad
+kontaktu (`telegramReachableIDs`) i od razu nadaje tag na grupach. Nie otwiera procedury `/start` i nie wysyła linków (od tego są `/start`
+i `/grupy`); gdy bot nie zna konta, podpowiada, co zrobić (wpisać @username w ustawieniach i wysłać `/start`). Użyte na grupie z `TELEGRAM_GROUPS`
+bot odsyła krótką instrukcję „pisz na priv" (jak przy `/start` i `/grupy`), niczego nie zapisuje.
+
 **Wiadomość na grupie jako wyzwalacz.** Gdy ktoś napisze na grupie z `TELEGRAM_GROUPS` (bot jako admin widzi wszystkie wiadomości):
 - **zweryfikowany** dostaje tag, jeśli tej pary (grupa, konto) jeszcze nie załatwiono (potem zero zapytań),
 - **niezweryfikowany** dostaje pod wiadomością reakcję (`TELEGRAM_UNVERIFIED_REACTION`, domyślnie 🙏, puste = wyłączone), najwyżej raz na 6 h

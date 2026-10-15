@@ -58,6 +58,7 @@ async def amain(dry_run: bool, once: bool, audit: bool = False) -> None:
         tg_logic.bot = tg_app.bot
         tg_app.add_handler(CommandHandler("start", tg_logic.on_start))
         tg_app.add_handler(CommandHandler("grupy", tg_logic.on_groups))
+        tg_app.add_handler(CommandHandler("verify", tg_logic.on_verify))
         tg_app.add_handler(CallbackQueryHandler(tg_logic.on_button))
         tg_app.add_handler(ChatMemberHandler(tg_logic.on_chat_member, ChatMemberHandler.CHAT_MEMBER))
         # group=1: działa obok komend (/start na grupie też jest wiadomością), nie zamiast nich
@@ -67,6 +68,7 @@ async def amain(dry_run: bool, once: bool, audit: bool = False) -> None:
         await tg_app.bot.set_my_commands([
             ("start", "Połącz konto z Authentikiem"),
             ("grupy", "Wyślij mi świeże linki do grup"),
+            ("verify", "Potwierdź swoje konto (bez linków)"),
         ])
         await tg_app.start()
         # chat_member (wejście do grupy) nie przychodzi domyślnie: trzeba o nie poprosić
